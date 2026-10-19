@@ -1,0 +1,125 @@
+{
+  "name": "@octopusprime/openclaw-channel-plugin",
+  "version": "1.27.0",
+  "type": "module",
+  "description": "OpenClaw channel plugin for Octopus Prime: connects the agents on your OpenClaw Gateway to your Octopus Prime organization over an outbound WSS connection, with no inbound port.",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "openclaw-channel",
+    "octopus-prime",
+    "ai-agents"
+  ],
+  "homepage": "https://octopusprimeai.com",
+  "bugs": {
+    "url": "https://app.octopusprimeai.com/support",
+    "email": "support@octopusprimeai.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ivan8344011/octopus-prime-openclaw-plugin.git"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.16.0 <25 || >=26.1.0"
+  },
+  "files": [
+    "dist/index.js",
+    "dist/setup-entry.js",
+    "dist/doctor-contract-api.js",
+    "dist/secret-contract-api.js",
+    "dist/src/*.js",
+    "openclaw.plugin.json",
+    "assets/icon.png",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "setupEntry": "./dist/setup-entry.js",
+    "setupFeatures": {
+      "configPromotion": "preserve-root"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.8",
+      "minGatewayVersion": "2026.9.8"
+    },
+    "build": {
+      "openclawVersion": "2026.9.8",
+      "pluginSdkVersion": "2026.9.8"
+    },
+    "channel": {
+      "id": "octopus-prime",
+      "label": "Octopus Prime",
+      "blurb": "Connect OpenClaw to your Octopus Prime organization.",
+      "setup": {
+        "fields": [
+          {
+            "key": "backendUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--backend-url <url>",
+              "description": "Canonical Octopus Prime HTTPS backend URL"
+            }
+          },
+          {
+            "key": "setupCode",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--setup-code <code>",
+              "description": "One-time Octopus Prime connector setup code"
+            }
+          },
+          {
+            "key": "connectorToken",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--connector-token <token>",
+              "description": "Authenticated connector credential returned by setup exchange"
+            }
+          },
+          {
+            "key": "connectorId",
+            "kind": "string",
+            "cli": {
+              "flags": "--connector-id <id>",
+              "description": "Authenticated connector identity returned by setup exchange"
+            }
+          },
+          {
+            "key": "orgId",
+            "kind": "string",
+            "cli": {
+              "flags": "--org-id <id>",
+              "description": "Authenticated organization identity returned by setup exchange"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm test",
+    "release:check": "npm test && node scripts/release-check.mjs"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.8"
+  },
+  "dependencies": {
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "26.6.4",
+    "@types/ws": "8.18.2"
+  }
+}

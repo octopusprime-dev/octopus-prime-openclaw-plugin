@@ -1,0 +1,208 @@
+{
+  "id": "octopus-prime",
+  "channels": [
+    "octopus-prime"
+  ],
+  "name": "Octopus Prime",
+  "description": "Octopus Prime channel plugin — secure outbound connector to the hosted Octopus Prime backend.",
+  "categories": [
+    "channels"
+  ],
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": []
+  },
+  "contracts": {
+    "tools": [
+      "octopus_log_book",
+      "octopus_audit",
+      "octopus_folder",
+      "octopus_channel_history",
+      "octopus_session_title"
+    ]
+  },
+  "toolMetadata": {
+    "octopus_log_book": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_audit": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ]
+    },
+    "octopus_folder": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_channel_history": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ]
+    },
+    "octopus_session_title": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "octopus-prime": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "backendUrl": {
+            "type": "string"
+          },
+          "setupCode": {
+            "type": "string"
+          },
+          "connectorToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "properties": {
+                  "source": {
+                    "enum": [
+                      "env",
+                      "file",
+                      "exec"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          },
+          "connectorId": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "allowRemoteReset": {
+            "type": "boolean"
+          },
+          "shareMachineStats": {
+            "type": "boolean"
+          },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "backendUrl": {
+                  "type": "string"
+                },
+                "connectorToken": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "source",
+                        "provider",
+                        "id"
+                      ],
+                      "properties": {
+                        "source": {
+                          "enum": [
+                            "env",
+                            "file",
+                            "exec"
+                          ]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "connectorId": {
+                  "type": "string"
+                },
+                "orgId": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "backendUrl": {
+          "label": "Octopus Prime backend URL"
+        },
+        "setupCode": {
+          "label": "One-time setup code",
+          "sensitive": true
+        },
+        "connectorToken": {
+          "label": "Connector credential",
+          "sensitive": true
+        },
+        "allowRemoteReset": {
+          "label": "Allow restarts from Octopus Prime"
+        },
+        "shareMachineStats": {
+          "label": "Share this computer's load (CPU, memory, disk) with Octopus Prime"
+        },
+        "accounts.*.backendUrl": {
+          "label": "Octopus Prime backend URL"
+        },
+        "accounts.*.connectorToken": {
+          "label": "Connector credential",
+          "sensitive": true
+        }
+      }
+    }
+  }
+}

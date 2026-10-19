@@ -1,0 +1,18 @@
+Octopus Prime channel plugin for OpenClaw
+(@octopusprime/openclaw-channel-plugin)
+Copyright 2026 Neogenesis Research & Technologies LLC
+
+This product is licensed under the Apache License, Version 2.0 (see the
+LICENSE file). It includes software developed at Neogenesis Research &
+Technologies LLC for Octopus Prime (https://octopusprimeai.com).
+
+"Octopus Prime" and the octopus logo (including assets/icon.png) are
+trademarks of Neogenesis Research & Technologies LLC. They are not licensed
+under the Apache License, Version 2.0: as Section 6 of that license says, it
+does not grant permission to use the trade names, trademarks, service marks,
+or product names of the Licensor, except as required for reasonable and
+customary use in describing the origin of the Work and reproducing the content
+of this NOTICE file.
+
+The Octopus Prime service and apps are not part of this package and are not
+covered by this license.

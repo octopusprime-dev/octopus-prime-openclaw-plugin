@@ -18,9 +18,21 @@
       "octopus_audit",
       "octopus_folder",
       "octopus_channel_history",
-      "octopus_session_title"
+      "octopus_session_title",
+      "octopus_tasks",
+      "octopus_calendar",
+      "octopus_projects",
+      "octopus_meeting",
+      "octopus_backup"
     ]
   },
+  "cliCommands": [
+    {
+      "name": "octopus-prime",
+      "description": "Octopus Prime connector management",
+      "hasSubcommands": true
+    }
+  ],
   "toolMetadata": {
     "octopus_log_book": {
       "profiles": [
@@ -54,6 +66,40 @@
         "messaging"
       ],
       "sideEffecting": true
+    },
+    "octopus_tasks": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_calendar": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_projects": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_meeting": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ],
+      "sideEffecting": true
+    },
+    "octopus_backup": {
+      "profiles": [
+        "coding",
+        "messaging"
+      ]
     }
   },
   "configSchema": {

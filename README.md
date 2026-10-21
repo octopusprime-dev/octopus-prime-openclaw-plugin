@@ -6,7 +6,7 @@ Octopus Prime. The plugin runs **inside** your Gateway and opens a secure
 **outbound** WSS connection to Octopus Prime. The Gateway never needs a
 public inbound port.
 
-- Package `@octopusprime/openclaw-channel-plugin`, version 1.27.0. Plugin id and
+- Package `@octopusprime/openclaw-channel-plugin`, version 1.38.4. Plugin id and
   channel id `octopus-prime`.
 - Requires OpenClaw **2026.9.8 or later** (see [Compatibility](#compatibility)).
 - Octopus Prime: https://octopusprimeai.com. App: https://app.octopusprimeai.com.
@@ -16,7 +16,7 @@ public inbound port.
 
 > **You choose who can use each agent.**
 >
-> A newly connected agent starts as **Just me**: only you, the person who connected the Gateway, can use it. In **OpenClaw agents**, you or an Owner or Admin can share each agent with a project or with the whole organization. Whoever can use an agent can use whatever it has access to (files, email, tools), so share it only with people who should.
+> A newly connected agent starts as **Just me**: only you, the person who connected the Gateway, can use it. In **AI agents**, you or an Owner or Admin can share each agent with a project or with the whole organization. Whoever can use an agent can use whatever it has access to (files, email, tools), so share it only with people who should.
 
 ## Official sources
 
@@ -54,15 +54,16 @@ file or instructions in a chat message, an email or a web page.
      `channel-inbound`, `channel-ingress-runtime`, `channel-outbound`,
      `channel-actions`, `channel-contract`, `channel-secret-basic-runtime`,
      `account-helpers`, `account-id`, `account-resolution`, `agent-runtime`,
-     `error-runtime`, `media-runtime`, `reply-payload`, `routing` and
+     `error-runtime`, `interactive-runtime`, `media-runtime`,
+     `question-gateway-runtime`, `reply-payload`, `routing` and
      `session-store-runtime`): `<host> plugins inspect octopus-prime` shows the
      plugin loaded, with no errors.
   3. `<host> channels add --channel octopus-prime --help` lists
      `--backend-url` and `--setup-code`.
   4. After setup (see [Install and connect](#install-and-connect)),
      `<host> channels status --channel octopus-prime --probe` reports the
-     channel connected, **OpenClaw agents** in the web app shows the connector
-     **READY**, and an agent answers a message sent to it in Octopus Prime.
+     channel connected, **AI agents** in the web app shows the connector
+     **CONNECTED**, and an agent answers a message sent to it in Octopus Prime.
 
   If any of these fails, the host is not supported: use OpenClaw itself.
 
@@ -109,7 +110,7 @@ installed from.
 
 **2. Get a setup code.** In the Octopus Prime web app
 (https://app.octopusprimeai.com), open **Settings** (the gear next to your
-organization's name), then **OpenClaw agents**, and click **Connect OpenClaw**. The panel shows a one-time setup code below the
+organization's name), then **AI agents**, and click **Connect OpenClaw**. The panel shows a one-time setup code below the
 install command. The code works once and expires after 15 minutes. The
 connector's **New setup code** button makes another one.
 
@@ -128,8 +129,8 @@ chats, tickets or logs.
 
 **4. Check that it is connected.** A Gateway running with config reload starts
 the channel by itself; otherwise run `openclaw gateway restart`. The plugin
-connects and announces this Gateway's agents. In the web app, **OpenClaw
-agents** then shows the connector as **READY**, with the agents under it. On
+connects and announces this Gateway's agents. In the web app, **AI
+agents** then shows the connector as **CONNECTED**, with the agents under it. On
 the Gateway host, this asks the running Gateway about the channel:
 
 ```sh
@@ -158,13 +159,13 @@ OpenClaw lists what it will remove and asks you to confirm. That includes the
 plugin's channel configuration (`channels.octopus-prime`), where setup saved
 the connector credential of every account. Then, in each organization the
 Gateway was connected to, an Owner or Admin clicks **Revoke** (the bin icon)
-on the connector in **OpenClaw agents**: its credential stops working and its
+on the connector in **AI agents**: its credential stops working and its
 agents leave Octopus Prime.
 
 ### If your connection breaks
 
 An OpenClaw update or a change on the Gateway host can stop the connector:
-**OpenClaw agents** then shows the connector offline, or Octopus Prime says
+**AI agents** then shows the connector offline, or Octopus Prime says
 an agent didn't respond. Owners and Admins see what is wrong on the
 connector's row: offline, an outdated plugin (older than the version Octopus
 Prime AI supports), an OpenClaw version older than the plugin needs, or
@@ -210,12 +211,12 @@ which you can also follow yourself on the Gateway host:
 5. **Set up again only if the credential is refused or missing.** If
    `openclaw channels status --channel octopus-prime --probe` still fails
    because the connector's credential is refused or missing, run setup again
-   for the same connector: in **OpenClaw agents**, an Owner (or whoever
+   for the same connector: in **AI agents**, an Owner (or whoever
    connected the Gateway) clicks **New setup code** on that connector, then
    step 3 of [Install and connect](#install-and-connect) runs with the new code
    (add `--account <name>` for an account other than the default one). Enter
    the code yourself; never paste it into a chat.
-6. **Report.** Check that **OpenClaw agents** shows the connector **READY**
+6. **Report.** Check that **AI agents** shows the connector **CONNECTED**
    again; the agent reports what it found and changed.
 
 Since 1.12.0 the plugin tells Octopus Prime
@@ -237,7 +238,7 @@ the new code over your first organization's connector, which disconnects it.
 
 **2. Get a setup code in the second organization.** You must be an Owner or
 Admin there. In the web app, switch to that organization, open **Settings**,
-then **OpenClaw agents**, and click **Connect OpenClaw**.
+then **AI agents**, and click **Connect OpenClaw**.
 
 **3. Run setup with a name for the new account** (letters, digits, `-` and
 `_`, but not `channel`, `group`, `direct`, `dm` or `thread`), here `acme`,
@@ -254,14 +255,14 @@ another account already connects, and a code for another organization than
 the one the named account is connected to. Setup run without `--account`
 names the default account, so a second organization's code is refused there
 instead of replacing your first organization's connector. A refused code is
-used up; the new connector stays in that organization's **OpenClaw agents**,
+used up; the new connector stays in that organization's **AI agents**,
 where **New setup code** makes another code for it.
 
 **4. Check it.** A Gateway running with config reload applies the change by
 itself; otherwise run `openclaw gateway restart`. OpenClaw reloads the plugin
 after a change to its channel settings, so your first organization's
-connector may reconnect once as well. In each organization, **OpenClaw
-agents** then shows its own connector as **READY**. On the Gateway host:
+connector may reconnect once as well. In each organization, **AI
+agents** then shows its own connector as **CONNECTED**. On the Gateway host:
 
 ```sh
 openclaw channels status --channel octopus-prime --probe
@@ -303,7 +304,7 @@ then, and the first organization keeps only the agents it names.
 
 ### Remove an account
 
-In that organization's **OpenClaw agents**, click **Revoke** on its
+In that organization's **AI agents**, click **Revoke** on its
 connector. Then remove the account's settings on the Gateway host, here
 `acme`:
 
@@ -341,9 +342,11 @@ With plugin 1.27.0 or later, the Octopus Prime apps show how busy the
 computer running this Gateway is: a small **Computer** pill beside each agent
 session's Context, with CPU, memory, free disk and the Gateway's own memory,
 and a warning in the agents' conversations when the computer stays under
-heavy load (memory above 85% or CPU above 90% for 3 minutes or more). The
-Gateway's owner is told once. Everyone in the organization who can see the
-Gateway's agents sees these numbers.
+heavy load (memory above 85% or CPU above 90%; with 1.36.0 for 60 seconds or
+more, 3 minutes before). The Gateway's owner gets a pop-up, and the Computer
+details list the Gateway's load warnings of the last 30 days: when, the peak
+memory and CPU, how long, and which agents were warned. Everyone in the
+organization who can see the Gateway's agents sees these numbers.
 
 The plugin sends numbers only, with its heartbeat (about every 25 seconds):
 CPU load (the 1-minute load average over the CPU cores), memory used (on
@@ -354,8 +357,9 @@ example) and how many there are. Never process names, file paths or anything
 a program or browser tab shows. On Linux the plugin reads them from what
 Node and `/proc` already give; on macOS it also runs `/usr/bin/vm_stat` and
 `/bin/ps -A -o pid=,ppid=,rss=` (process numbers and memory only) through
-OpenClaw's own command runner, at most every 20 seconds. Octopus Prime keeps
-the latest numbers and 24 hours of 5-minute samples.
+OpenClaw's own command runner, at most every 20 seconds (every 10 seconds
+while memory or CPU is above 80%). Octopus Prime keeps the latest numbers, 24
+hours of 5-minute samples and 30 days of load warnings.
 
 It is on by default. To stop sending them:
 
@@ -363,16 +367,249 @@ It is on by default. To stop sending them:
 openclaw config set channels.octopus-prime.shareMachineStats false
 ```
 
-While the computer is under heavy load, each agent's turn also carries one
-line asking it to go easy ("The computer running you is under heavy load
-(memory 92%, CPU 88%). Prefer light work, close tabs/processes you opened,
-and avoid starting parallel jobs."). That line is added on the Gateway and
-goes only to the agent; it works with the setting off too.
+### Computer load protection (1.36.0)
+
+When the computer has been under heavy load for 60 seconds, each agent on the
+Gateway gets a warning on its next message, at most once in 15 minutes, and
+once more, stronger, if memory reaches 95%:
+
+> Octopus Prime: the computer running you is near full capacity (memory 92%,
+> CPU 88%; agents' work here uses 3.3 GB of 16.0 GB). Take corrective action
+> now: 1) close browsers/tabs and processes you opened and pause heavy or
+> parallel work; 2) message the other agents on this Gateway (whatever model
+> they use) and ask them to do the same; 3) check what else is using
+> memory/CPU on this computer (other apps, other agent tools) and, if
+> something outside your own work is the cause, tell the owner in your chat
+> what it is — never close or kill programs you did not start. Explain this if
+> a user asks what happened.
+
+The warning is added on the Gateway and goes only to the agent; it works with
+`shareMachineStats` off too. An agent in the middle of a long job gets it with
+its next message, so it may finish its current step first. Every agent on the
+computer is warned, even ones that didn't cause it: this OpenClaw does not
+tell which agent's processes use the memory. "Agents' work here" is the
+Gateway with every process it started; several Gateways on one computer each
+see the same machine numbers.
+
+It is on for each Gateway by default. Owners and Admins turn it off per
+Gateway in Octopus Prime: Settings › AI agents › the Gateway › **Computer load
+protection**. Off, no agent is warned and the owner gets no pop-up; the
+Computer pill still shows the numbers. The backend tells the plugin in its
+welcome and with each heartbeat's answer.
+
+## Tasks, calendar and projects
+
+With plugin 1.28.0 or later, and an Octopus Prime backend that offers it, your
+agents can create tasks, calendar events and projects when someone asks ("add
+a task for me to send the Q3 numbers by Friday", "book a review with Ana
+tomorrow at 10", "set up a project for the launch"). Each turn tells the agent
+so in one line, and it gets three tools:
+
+- `octopus_tasks`: create a task (title, notes, due time, assignee, this
+  conversation or its project, priority, category, reminders), list tasks
+  (this conversation's, its project's, the agent's own, or the asker's), mark
+  one done, in progress, open again or cancelled, change its due time or
+  assignee, and comment in its thread.
+- `octopus_calendar`: create an event (start and end, or all day, in the time
+  zone given, with people and agents of the conversation invited and
+  reminders), list the events of a range, and change or cancel the events the
+  agent created.
+- `octopus_projects`: create a project, with the person who asked and the agent
+  in it and its usual starter channels, and list the projects the agent is in.
+
+The agent acts with the permissions of the person whose message it is
+answering, and only in that conversation and its project: it can give a task
+to, or invite, only someone in the conversation, and a person who may not
+create projects in the app (a Member) cannot have one created by an agent
+either; the agent is told so and tells them. A message another agent sent
+starts no such request. Nothing is ever deleted: tasks and events are
+cancelled. Octopus Prime limits each agent to 30 new tasks, events and projects
+an hour, shows "Created by" the agent on what it made, and records who asked,
+which agent and when. Times are read in the time zone the agent gives (an IANA
+name such as `Europe/Madrid`), so an agent that does not know a person's time
+zone should ask.
+
+## Your agent in your meetings
+
+With plugin 1.29.0 or later, and an Octopus Prime backend that offers it,
+people can send your agent to a Zoom, Google Meet or Microsoft Teams meeting
+from a link in a conversation or a calendar event ("Send Atlas to this
+meeting"). The agent joins with OpenClaw's own meeting plugins as an
+observe-only guest that reads the live captions (it never speaks and records
+no audio or video), and when the meeting should be over it posts the notes in
+that conversation: a summary, the decisions and the action items, which it
+also adds to the project's Project Log. Action items with a clear owner become
+tasks.
+
+On the Gateway:
+
+1. Install the meeting plugins you want (they are separate OpenClaw plugins):
+
+   ```bash
+   openclaw plugins install @openclaw/zoom-meetings
+   openclaw plugins install @openclaw/google-meet
+   openclaw plugins install @openclaw/teams-meetings
+   ```
+
+2. Run each one's setup check (`openclaw zoommeetings setup`,
+   `openclaw googlemeet setup`, `openclaw teamsmeetings setup`) and fix what it
+   reports. The Gateway (or a paired node) needs Chrome with an OpenClaw
+   browser profile; Google Meet may need that profile signed in to Google.
+3. Keep meeting notes on (`transcripts.enabled`, on by default): without them
+   no notes come back.
+
+Octopus Prime → Settings › Plugin shows which meeting plugins each Gateway
+reports ("Meetings: Zoom ✅ · Google Meet ⚠️ set up"). The plugin reads that
+from OpenClaw's config (`plugins.entries`); OpenClaw's setup check is what says
+whether a join can work. A meeting's host may still have to let the agent in,
+and Zoom can ask for a passcode, a sign-in or a CAPTCHA: the agent says so in
+the conversation. Tell everyone in the meeting that an AI notetaker is joining;
+many places require their consent.
+
+## Optional: approve agent actions in Octopus Prime
+
+OpenClaw asks before risky actions: a command an agent wants to run on this
+computer ([exec approvals](https://docs.openclaw.ai/tools/exec-approvals)) or
+a tool call a plugin wants approved
+([plugin permission requests](https://docs.openclaw.ai/plugins/plugin-permission-requests)).
+With plugin 1.31.0 or later, and an Octopus Prime backend that offers it, you
+can answer those that come up in your agents' Octopus Prime conversations from
+the apps: a card in the conversation and a push ("Atlas wants to run a
+command") with **Allow once**, **Always allow** and **Deny**. The card shows
+the exact command, its folder and where it runs (or the tool and the plugin's
+own title, description and risk), and when it expires.
+
+It is off until you turn it on, per Gateway, in Octopus Prime → Settings ›
+Plugin → **Approve agent actions in Octopus**. Only the person who connected
+the Gateway can turn it on, sees the cards and answers them, and only with
+two-step login on: never the organization's Owners, Admins or anyone else. Each
+answer is recorded (who, what, when and the result) and listed under
+**Approval history**. Typing `/approve` in an Octopus Prime conversation is
+the owner's alone too.
+
+The plugin is one of OpenClaw's native approval surfaces for its channel
+(`approvalCapability`, `src/approvals.ts`): it forwards only an approval raised
+in a turn of one of this account's conversations, while the setting is on and
+the Gateway is connected, and hands your answer to OpenClaw's own approval
+service (`approval.resolve`), never through chat text. OpenClaw's other
+surfaces (the Control UI, its apps, `/approve` in the chat it came from) get
+every request as before: the first answer wins, and the card then says who
+answered and how. With the setting off, nothing is forwarded and approvals go
+wherever OpenClaw sends them today. A command longer than 4,000 characters, or
+one with characters the card could not show as they are, is never forwarded.
+Approvals from scheduled automations never reach chat surfaces (OpenClaw's
+rule), so they do not come here either.
+## Rich replies (1.32.0)
+
+With plugin 1.32.0 or later, an agent's reply can carry OpenClaw's message
+presentation, and the Octopus Prime apps draw it natively: a card with a
+title and a tone (neutral, info, success, warning, danger), text, small
+context lines, dividers, tables, and pie, bar, line and area charts. Agents
+get the `presentation` parameter of OpenClaw's `message` tool on Octopus
+Prime, and a reply with a presentation is shown the same way.
+
+The reply's words always say everything the card shows: the plugin sends
+OpenClaw's own plain-text version with it, so search, read aloud, Copy,
+notifications and older apps keep working. The words alone are sent, as
+before, when the Octopus Prime server does not offer rich replies yet, when
+the card is over Octopus Prime's limits (40 blocks, 100 table rows, 16,000
+bytes, and so on), or when the reply is long enough to go in parts.
+
+Buttons and selects are drawn from 1.33.0 on (see Tap-to-answer below); with
+a server that does not offer them, OpenClaw shows them as a context line
+("Actions:" and the labels) in the card.
+
+## Tap-to-answer (1.33.0)
+
+With plugin 1.33.0 or later and an Octopus Prime server that offers it, the
+apps (web and iPhone) show an agent's questions and buttons as chips:
+
+- **Questions.** When an agent asks with OpenClaw's `ask_user` tool, the
+  question shows as a card under the agent's message: its options (the
+  recommended one highlighted), one choice or several, "Other…" for the
+  person's own words, and how long it stays open. Only the person the agent is
+  answering (and people the message @mentions, and in a DM with the agent, its
+  person) can answer; everyone else sees it read-only. A single choice, or the
+  "Other…" words, goes straight back to OpenClaw as the question's answer and
+  the agent carries on; the chat shows "Alex chose: Staging". Several choices
+  are sent as the person's reply, comma-separated, which is how OpenClaw reads
+  a typed answer (it reaches the agent once the turn that asked is over). An
+  expired question says "Expired". A prompt of several questions stays plain
+  text, as on other messaging channels.
+- **Buttons and selects** an agent sends with the `message` tool's
+  `presentation`: a link button opens its link, a command button sends its
+  command, and any other button or option sends its label as the person's
+  message, which the agent gets as their reply. The agent's system prompt now
+  says inline buttons are on for Octopus Prime.
+
+The words are always sent too, so search, read aloud, notifications and older
+apps keep working, and nothing changes with an older server.
+
+## Pictures you send your agents (1.35.0)
+
+With plugin 1.35.0 or later and an Octopus Prime server that offers it, a
+screenshot or photo you send an agent (JPEG, PNG, WebP, GIF or HEIC, up to
+25 MB each, up to five in a message) reaches it as an image, not only as a
+link: the plugin downloads each one from Octopus Prime when the message
+arrives and gives it to OpenClaw with the message, so the agent sees it and
+it stays in the session for later turns. The links stay in the message too;
+a picture the plugin could not get is named there, so the agent reads it from
+its link. Nothing changes with an older server.
+
+## Agent Backup (1.38.0)
+
+An encrypted copy of this Gateway's OpenClaw files, kept by Octopus Prime, so
+you can bring your agents back on a new computer: their workspaces (memory,
+skills, notes), the config without its secrets, the automations, and a list of
+the plugins, packages and repositories to install again. It needs a Backup
+plan for this Gateway (an Owner adds one in Billing on the web) and an
+Octopus Prime server that offers `agent-backup`; without either nothing
+changes.
+
+- **Encrypted on this computer.** Files are split into pieces, compressed and
+  encrypted (AES-256-GCM) before they leave; Octopus Prime stores ciphertext,
+  sizes and counts, never a file name, a path, a file's text or a key. The key
+  is kept in this computer's keychain (macOS Keychain, the Linux Secret
+  Service or Windows DPAPI) so scheduled backups run on their own; a computer
+  with none of them can't turn backups on.
+- **Passphrase and recovery key.** Setup asks for a passphrase (at least 12
+  characters) and shows a recovery key once (`OPRK1-…`). Either one restores
+  the backup. Lose both and nobody can restore it, not even Octopus Prime.
+- **Never backed up:** `credentials/`, `.env` files, `secrets.json`, auth
+  profiles and each agent's `openclaw-agent.sqlite`, sessions and transcripts,
+  cookies and browser profiles, SSH/GPG/TLS keys, `.npmrc`, `.netrc`,
+  `node_modules`, caches, files over 100 MB and logs older than 7 days.
+  Secret values in `openclaw.json` are removed (placeholders like `${VAR}` and
+  secret references stay), and repositories with a remote are recorded, not
+  copied.
+
+Commands, on the Gateway's computer:
+
+```
+openclaw octopus-prime backup setup        # passphrase, recovery key, key in this keychain
+openclaw octopus-prime backup status       # plan, last backup, storage used
+openclaw octopus-prime backup now          # back up now
+openclaw octopus-prime backup estimate     # how big a backup would be (uploads nothing)
+openclaw octopus-prime backup restore      # bring a backup back (passphrase or recovery key)
+openclaw octopus-prime backup passphrase   # change the passphrase (--new-recovery-key too)
+```
+
+`--account <id>` picks the Octopus Prime account when the Gateway has several.
+`restore` never overwrites a file that is already there unless you pass
+`--overwrite`; it merges `openclaw.json` (this computer's pairing and secrets
+stay), imports the automations, writes `OCTOPUS-REBUILD-KIT.md` into the
+workspace and prints the Sign-in checklist. `--keep-keys` keeps the same keys
+for this computer's own backups.
+
+Agents get the `octopus_backup` tool: ask "How big would an Octopus Prime
+backup of you be?" and it counts exactly what a backup would take (no plan
+needed, nothing uploaded) and says which plan fits; `status` says whether
+backups are on. Scheduled backups start after a Gateway restart.
 
 ## Optional: suggested etiquette for your agents
 
 The same panel offers a ready-made etiquette prompt for agents that work in a
-team. In https://app.octopusprimeai.com, open **OpenClaw agents**, find
+team. In https://app.octopusprimeai.com, open **AI agents**, find
 **Suggested etiquette for your agent** and click **Copy**, then paste it into
 your agent's instructions if you like. It is only a suggestion: edit it or
 ignore it. Octopus Prime never sends it to your agent, and your own rules
@@ -637,21 +874,25 @@ in Runtime contract.
   cancelled, when a reply is still pending in core's queue, when the turn was
   refused before it started (a redelivered message whose turn already
   completed is one), or when the connector is stopping. The notice is worded by
-  cause and names nothing of the Gateway, model or provider:
+  cause and names nothing of the Gateway, model or provider (1.34.0):
+  - rate limit (a FailoverError `rate_limit`, HTTP 429, core's "The AI
+    service needs a short break", a provider's "usage limit reached"): "I'm at
+    my usage limit right now — try again in a few minutes."
   - temporary (a stalled stream, a timeout, an overloaded or briefly
-    unavailable provider): "Sorry, I hit a temporary problem and did not
-    finish. Please send that again."
-  - AI account (billing, quota or sign-in refused by the provider, HTTP
-    401/402/403, or a 429 about quota): "This agent's AI account needs
-    attention (billing or sign-in). The workspace owner needs to check their
-    OpenClaw account."
-  - unknown: worded as temporary; but an unknown failure right after another
-    failed turn in the same conversation says "The workspace owner needs to
-    check the agent's OpenClaw setup." A turn that answers ends the run.
+    unavailable provider): "Something went wrong on my side — please send
+    that again."
+  - AI account (billing or sign-in refused by the provider, HTTP 401/402/403,
+    or a 429 about money: out of credits, `insufficient_quota`) and setup (no
+    usable model: `model_not_found`, "isn't set up yet"): "My OpenClaw setup
+    needs attention — the workspace owner needs to check it."
+  - unknown: worded as temporary. A failure in a row is no setup problem:
+    until 1.34.0 an unknown failure right after another one asked the owner
+    to check the setup, which greeted every message of a passing usage limit.
   The cause comes from the FailoverError's reason (`billing`, `auth`,
-  `auth_permanent`, `session_expired` are the account's; `timeout`,
-  `rate_limit`, `overloaded`, `server_error`, `empty_response` are temporary),
-  then an HTTP status, then the words of the error or of core's error final.
+  `auth_permanent`, `session_expired` are the account's; `model_not_found` is
+  the setup's; `rate_limit` is a rate limit; `timeout`, `overloaded`,
+  `server_error`, `empty_response` are temporary), then an HTTP status, then
+  the words of the error or of core's error final.
   Core's own texts for a failed turn (its error finals, which name logs,
   commands or a run id, and "OpenClaw couldn't produce or deliver a reply")
   are kept from the person through the turn plan's `delivery.preparePayload`;
@@ -659,13 +900,14 @@ in Runtime contract.
   case is the backend's to word. The notice is a `message.outbound` with
   `outbound_id` `turn-failed:<event_id>` (with a SHA-256 of an event id too
   long for 128 characters) and two more fields: `notice: "turn_failed"` and
-  `cause` (`temporary`, `ai_account` or `unknown`; the plugin never sends the
-  backend's `agent_offline`). A backend with failed-turn
+  `cause` (`rate_limit`, `temporary`, `ai_account`, `setup` or `unknown`; the
+  plugin never sends the backend's `agent_offline`). A backend with failed-turn
   notices saves it in the sentence for its cause, the
-  same on the web and the iPhone, decides itself when an unknown cause is the
-  conversation's second failure in a row, marks the delivery failed and moves
-  the conversation on; a backend without it ignores both fields and shows the
-  body, in which the plugin words that second failure itself. A message's notice
+  same on the web and the iPhone, folds failures in a row into one notice that
+  counts the messages waiting, tells the agent's owner of a setup problem once
+  an hour, marks the delivery failed and moves the conversation on (a rate
+  limit raises no "didn't respond" alert); a backend without it ignores both
+  fields and shows the body. A message's notice
   is decided once: a replay of it that fails again sends the identical frame,
   which the backend answers from what it stored. The notice is sent once the
   turn's Working repeats stopped, and nothing waits for it: one that is not
@@ -745,12 +987,32 @@ in Runtime contract.
   run's fresh snapshot, else OpenClaw's pre-prompt estimate for that same
   session, as `/status` shows it; either size is `null` until OpenClaw has
   measured it. Octopus Prime shows it as a context meter on the conversation.
-  Nothing else is sent: no costs and no other usage. It goes only to a backend
+  Nothing else is in this frame (a turn's tokens and cost have their own, see
+  "Agent usage" below). It goes only to a backend
   whose `welcome` offers the optional `session-stats` capability, and only on
   that socket. It is best effort: no receipt is awaited, nothing is retried
   (the next turn reports again), and a failed read only logs a warning, never
   touching the turn or its reply. A compaction OpenClaw runs after a reply is
   delivered shows with the next turn's report.
+- **Agent usage** (1.30.0): from the same session row, read after the turn,
+  the plugin sends `agent.usage` with the turn's `event_id`, `agent_id`, the
+  `provider` and `model` that ran it, `input_tokens`, `output_tokens`,
+  `cache_read_tokens`, `cache_write_tokens`, and `cost_usd` with
+  `cost_source` (`src/usage.ts`). OpenClaw keeps each run's usage on the row,
+  replacing the last run's, so the row after a turn holds that turn's usage.
+  The cost is OpenClaw's own estimate from its price list (`estimatedCostUsd`),
+  sent as `cost_source: "estimate"`, or `null` with no source when OpenClaw has
+  no price for the model; for a subscription plan it is what the same tokens
+  would cost on the API, not what the plan charges. A row OpenClaw did not
+  write during the turn (a slash command answered without the model), or one
+  whose usage is exactly what was last sent for that session, is not sent
+  again. Numbers and model names only: never a message, a prompt, a reply or a
+  tool call. Octopus Prime shows each agent's daily usage, by model and by
+  conversation, to its owner and the organization's Owners and Admins, with an
+  optional monthly budget. It goes only to a backend whose `welcome` offers the
+  optional `agent-usage` capability, best effort like the session stats. Only
+  turns of Octopus Prime messages are counted: what the agent does on other
+  channels of its Gateway is not.
 - **Sender's two-step login** (1.6.0): an Octopus Prime account can have
   two-step login on (a code from an authenticator app at sign-in). The backend
   marks a message that was sent from such an account: `sender.two_factor: true`
@@ -820,6 +1082,15 @@ in Runtime contract.
     Since 1.18.0 it adds a second sentence: "To ask another agent
     for work in this project, post in #Agent To Agent and @mention it by its
     full name; agents don't wake each other in other channels."
+    Since 1.37.0 a project's people can remove its Agent To Agent channel, and
+    a backend that knows says so in the frame (`no_agent_to_agent: true`, only
+    when true, only beside `project_id`; anything else is left out, never
+    refused). The second sentence is then: "This project has no Agent To Agent
+    channel now, so agents can't wake each other here. To ask another agent for
+    work, tell the person in this project's Strategize channel or in your
+    direct message with them what you need; they can ask that agent or add
+    Agent To Agent back." An older backend never says it, and the sentence
+    above stays.
     A backend with log-book reminders also reminds an agent in the project's Agent To
     Agent channel when its work there has waited a day for an entry.
   A message without `project_id`, or a backend that does not offer the log
@@ -1037,17 +1308,150 @@ in Runtime contract.
   `channels.octopus-prime.shareMachineStats` is `false`, each heartbeat
   `ping` carries `machine`: `cpu_percent` and `memory_percent` (whole numbers,
   0–100), and when known `swap_used_percent`, `disk_free_percent`,
-  `gateway_memory_bytes` and `gateway_processes`. A reading is taken at most
-  every 20 seconds, shared by every account of the Gateway, from Node's `os`
+  `gateway_memory_bytes`, `gateway_processes` and (1.36.0) `memory_total_bytes`,
+  `heavy` and `warned_agents` (the agent ids warned in this run of heavy load,
+  at most 50). A reading is taken at most every 20 seconds (every 10 while
+  memory or CPU is above 80%), shared by every account of the Gateway, from Node's `os`
   module, `/proc` on Linux, `statfs` of OpenClaw's state directory and, on
   macOS, `/usr/bin/vm_stat` and `/bin/ps -A -o pid=,ppid=,rss=` run through
   `api.runtime.system.runCommandWithTimeout` (5-second limit; the plugin never
   imports `child_process`). When those cannot run it falls back to Node's
   available memory and the Gateway process alone. A backend that does not
-  offer it is sent the heartbeat exactly as before. While every reading of the last 3 minutes or more had
-  memory above 85% or CPU above 90%, each turn gets one more context block
-  (type `machine_load`, before the app help line) with the line asking the
-  agent to go easy; that does not depend on the backend or the setting.
+  offer it is sent the heartbeat exactly as before. While every reading of the last 60 seconds or more had
+  memory above 85% or CPU above 90%, an agent's turn gets one more context block
+  (type `machine_load`, before the app help line) with the warning, at most
+  once per agent id in 15 minutes for all the Gateway's accounts, once more
+  sooner (the stronger warning) when memory reaches 95%. It does not depend
+  on `shareMachineStats`; a welcome or `pong` with `load_protection: false`
+  turns it off for that account until one says `true` (an older backend says
+  nothing: on).
+- **Tasks, calendar and projects** (1.28.0, `src/agent-work.ts`,
+  `src/agent-work-tool.ts`; `contracts.tools` and `toolMetadata` in
+  `openclaw.plugin.json`, in the `coding` and `messaging` tool profiles, marked
+  `sideEffecting`). The plugin asks for `agent-work` beside the others, and a
+  backend that has it offers it in its welcome. Only on such a connection do
+  the factories of `octopus_tasks`, `octopus_calendar` and `octopus_projects`
+  offer them, in a session the plugin last saw dispatch a message in any
+  conversation, only to that session's agent; and only then does each turn
+  carry one more context block (type `agent_work`, before the app help line):
+  "You can create tasks, calendar events and projects in Octopus Prime with
+  octopus_tasks / octopus_calendar / octopus_projects when someone asks."
+  - Every call is one `work.request` frame with a fresh `outbound_id`, the
+    session's `channel_id`, `agent_id` and `event_id` (never the model's),
+    `tool` (`tasks`, `calendar`, `projects`), `action` and `args` (the tool's
+    own arguments only; any other key the model passes is dropped), answered
+    by `work.result` or `work.rejected` (`reason`, and when the backend gives
+    them a sentence `detail` and the app's `code`) within 20 seconds, and
+    re-written after a closed socket like a reply: the backend makes what a
+    request makes under that request's own ID, so nothing is made twice.
+  - The backend acts as the person who sent the message of that delivery, through
+    the app's own routes, and only where the agent is. Its refusals:
+    `invalid_request` (with what was wrong), `unavailable`, `no_person` (an
+    agent started the turn), `stale_turn` (the message is older than 12
+    hours), `not_allowed` (the person's role), `not_found`, `not_own_event`,
+    `no_thread`, `refused` (the app's own refusal and sentence), `rate_limited`
+    (30 creates an hour per agent) and `busy`. Each reaches the agent as the
+    tool's answer, in plain words, not as an error.
+
+  With a backend that does not offer `agent-work` the tools are never offered,
+  no line is added and nothing is sent: everything works as with 1.27.0.
+- **Meetings** (1.29.0, `src/meetings.ts`; `octopus_meeting` in
+  `contracts.tools` and `toolMetadata`, `sideEffecting`). The plugin asks for
+  `meetings` beside the others; only on a connection whose welcome offers it:
+  - it sends `meetings.report` on connect and at the first heartbeat after it
+    changes: `platforms` (`zoom`, `google_meet`, `teams`, each `ready`, `off`
+    or `missing`, from `plugins.entries` of `zoom-meetings`, `google-meet` and
+    `teams-meetings`, `plugins.enabled`, `plugins.allow` and `plugins.deny`)
+    and `notes` (`transcripts.enabled !== false`);
+  - a `message.inbound` frame may carry `meeting` (`meeting_id`, `phase`
+    `join` or `notes`, `platform`, `url`, `ends_at`); one that is not right is
+    left out. That turn gets a context block of type `meeting` (before the app
+    help line) telling the agent which OpenClaw tool joins it (`zoom_meetings`,
+    `google_meet`, `teams_meetings`; action `join`, mode `transcribe`), or, for
+    `notes`, to read the notes with the `transcripts` tool and post them;
+  - `octopus_meeting` (actions `status`: joined, failed or left, with a
+    `detail`; and `notes`: `summary`, `decisions`, `action_items`) is a
+    `work.request` with `tool: "meetings"`, answered and refused as above;
+  - a `join` frame arms a timer (in this process, at most 24 hours) that sends
+    `meeting.due` (`meeting_id`, `channel_id`, `agent_id`) at `ends_at`, tried
+    again every minute while there is no such socket; the backend then asks
+    the agent for the notes in the requester's name, once.
+
+  With a backend that does not offer `meetings`, nothing is reported, the tool
+  is never offered and no frame names a meeting: everything works as with
+  1.28.0.
+- **Rich replies** (1.32.0, `src/presentation.ts`): the plugin asks for
+  `rich-presentation` beside the others. The outbound adapter declares
+  `presentationCapabilities` (text, context, divider, tables, charts; no
+  buttons or selects) and, through `resolvePresentationCapabilities`, tables
+  and charts only while the account's current socket's welcome offered
+  `rich-presentation`. Its `renderPresentation` returns `null` (core's own
+  plain text) unless that welcome offered it and the card passes the
+  backend's rules with a 16,000-byte cap; otherwise the payload's `text`
+  becomes `renderMessagePresentationFallbackText({ text, presentation:
+  sourcePresentation })` and the card, `{ title?, tone?, blocks }` with the
+  payload's own words (unless blank or the title) as the first `text` block,
+  goes in `channelData["octopus-prime"].presentation`, which routes the reply
+  to `message.send.payload`. That send adds `presentation` to the
+  `message.outbound` or `message.post` frame only when the reply is one frame
+  (no `reply_id`, `part`, `parts`), the frame with it stays within 60,000
+  bytes, and the socket's welcome still offers it; `body` is the full
+  fallback either way. A frame written again carries the same card. A resend
+  the backend refuses as `identity_conflict` is read back by its outbound id,
+  as one with files is. A backend that does not offer it gets the reply
+  exactly as before. `describeMessageTool` adds `capabilities:
+  ["presentation"]`.
+- **Tap-to-answer** (1.33.0, `src/questions.ts`): the plugin asks for
+  `ask-user` beside the others. While the account's current socket's welcome
+  offered it, `resolvePresentationCapabilities` turns `buttons` and `selects`
+  on and `agentPrompt.messageToolCapabilities` answers `["inlineButtons"]`.
+  `renderPresentation` then turns an `ask_user` prompt (core's
+  `channelData.askUser.questionId`) into an `ask` of kind `question`, and an
+  agent's `buttons` and `select` blocks into an `ask` of kind `buttons` (a
+  `url` or URL-backed `web-app` action keeps its link, a `command` action its
+  `/command`, a `callback` or legacy `value` only its label; approvals and
+  other actions stay an "Actions:" context line in the card), carried in
+  `channelData["octopus-prime"].ask`; the rest of the card goes as in 1.32.0.
+  `message.send.payload` reads that `ask`, or builds one for an `ask_user`
+  prompt core sent as words. A question's `header`, `text`, `options`
+  (`label`, `description`), `multi`, `other` and `expires_at` are read from
+  core's process-wide record of the pending question
+  (`Symbol.for("openclaw.askUserQuestions")`), else from the one-question
+  presentation core builds; a prompt of several questions gets none. The
+  `ask` follows the backend's rules (backend/agent_questions.py, shared cases
+  in backend/tests/fixtures/agent_question_cases.json; 8,192 bytes) and goes
+  on the reply's one frame as `presentation` does (it is kept before the card
+  when the frame would not fit both). After a question is sent the plugin
+  registers it with `questionGatewayRuntime.registerChannelDelivery`; when it
+  ends there it sends `{ type: "question.closed", message_id, question_id,
+  status }` (answered, expired or cancelled). A `{ type: "question.answer",
+  message_id, question_id, agent_id, channel_id, sender, answer }` frame for
+  an announced agent is resolved with `questionGatewayRuntime.resolveOption`
+  (`optionValue: answer`, `senderId: "octopus-prime:<sender.id>"`) without
+  holding up the socket's other frames, and answered `{ type:
+  "question.answer.result", message_id, question_id, status }`: `answered`,
+  `closed` (the question had already ended) or `failed`. A backend that does
+  not offer it gets the reply exactly as before.
+- **Pictures people send** (1.35.0, `src/inbound-media.ts`): the plugin asks
+  for `inbound-media` beside the others. A backend that offers it adds
+  `files: [{ id, name, content_type, size }]` to a `message.inbound` frame for
+  each picture of the message (JPEG, PNG, WebP, GIF, HEIC/HEIF), never a link;
+  the plugin keeps at most five well-formed entries (through its durable queue
+  too) and drops anything else, never the message. While the account's
+  current socket's welcome offered it, the turn downloads each picture of at
+  most 25 MB, in order, from `GET <backendUrl>/api/connector/files/<id>
+  ?event_id=<event>` with the connector's credential (`redirect: "error"`, 30
+  seconds each), keeps it only when the answer is a picture of at most 25 MB,
+  saves it with the host's `runtime.channel.media.saveMediaBuffer` (subdir
+  `inbound`) and passes the saved files as `media` to
+  `buildChannelInboundEventContext` (`kind: "image"`), so core hands them to
+  the model as the turn's images and keeps them with the session. A picture
+  it could not get (too large, refused, not a picture, cut short) is named
+  after the message in `BodyForAgent` only ("… isn't shown to you as an
+  image: "x.png". Read it from the link above."); the message's own text
+  keeps the backend's links. Logs name the picture's place and why, never an
+  address or a credential. A backend that does not offer it, or a frame
+  without `files`, changes nothing.
 - **Audited workspaces** (1.7.0): while an organization's Owner has Audited
   workspace on (see Audited workspaces above), the backend adds
   `audited: true`, at the top level, to every `message.inbound` frame of that
@@ -1236,8 +1640,8 @@ Two version axes are independent:
   `optional_capabilities`, which a backend without the log book ignores (every
   backend takes extra fields, and checks only that the v1 capabilities are
   among `capabilities`); it uses the log book only on a socket whose welcome
-  offers `log-book`; likewise `project-folder` (1.14.0) and `channel-history`
-  (1.15.0) in the same field. Audited workspaces (1.7.0) add nothing to the
+  offers `log-book`; likewise `project-folder` (1.14.0), `channel-history`
+  (1.15.0), `agent-work` (1.28.0), `meetings` (1.29.0) and `rich-presentation` (1.32.0) in the same field. Audited workspaces (1.7.0) add nothing to the
   negotiation, either way: the plugin learns that a workspace is audited from
   `audited: true` on a message frame, and only a turn that carried it can send
   `audit.conversations` or `audit.history`. Since 1.12.0 the negotiation
@@ -1381,6 +1785,15 @@ text the agent reads, and, through the compiled transport and a fake backend,
 that the tool is offered after a turn in any conversation only to its agent,
 never on a connection whose welcome did not offer `channel-history`, and that
 a read is written again after a closed socket.
+`tests/agent-work.test.mjs` checks the three tools' schemas with core's own
+argument validator, the frame (always the session's conversation, agent and
+delivery, the tool's own arguments only, whatever the model passes), each
+refusal's words and the text the agent reads, the `agent_work` context line,
+and, through the compiled transport and a fake backend, that the tools are
+offered after a turn in any conversation only to its agent, never on a
+connection whose welcome did not offer `agent-work`, and that a request is
+written again after a closed socket under the same `outbound_id`.
+`backend/tests/test_agent_work.py` covers the backend's side.
 `tests/audited-workspace.test.mjs` takes the plugin's tools from the compiled
 entry as core takes them and checks that a message without `audited` gives
 its turn the context 1.6.0 gave it (rebuilt with the SDK's own context

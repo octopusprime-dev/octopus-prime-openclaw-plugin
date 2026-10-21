@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { accountEnabled, accountSection, defaultConnectorAccountId, listConnectorAccountIds, normalizeAccountId, } from "./accounts.js";
+import { renderMessagePresentationFallbackText } from "openclaw/plugin-sdk/interactive-runtime";
 import { CONVERSATION_ID, octopusMessageActions } from "./actions.js";
-import { admitOutboundDelivery, reconcileOutboundReply, sendAgentPost, sendOutboundReply, uploadReplyFiles, } from "./transport.js";
+import { octopusApprovalCapability } from "./approvals.js";
+import { admitOutboundDelivery, askOffered, notifyApproval, presentationOffered, reconcileOutboundReply, requestApproval, sendAgentPost, sendOutboundReply, uploadReplyFiles, watchQuestion, } from "./transport.js";
+import { CHANNEL_DATA_KEY, channelDataPresentation, isObject, presentationReply, } from "./presentation.js";
+import { askUserQuestionId, channelDataAsk, questionAsk, splitControls } from "./questions.js";
 import { channelSecrets } from "../secret-contract-api.js";
 import { octopusGateway } from "./gateway.js";
 import { attachmentCount, withAttachmentsNote, withoutAttachments } from "./reply-attachments.js";
@@ -11,6 +15,58 @@ import { getTransportLifecycleStatus } from "./transport.js";
 import { optionalString, pinnedRuntimeConfigIssue } from "./runtime-config.js";
 import { octopusSetupContract } from "./setup.js";
 const SECTION = "octopus-prime";
+// What Octopus Prime draws of a reply's presentation (1.32.0).
+const PRESENTATION_CAPABILITIES = Object.freeze({
+    supported: true,
+    context: true,
+    divider: true,
+    tables: true,
+    charts: true,
+    buttons: false,
+    selects: false,
+});
+// A payload without core's presentation fields, which Octopus Prime gets in
+// its own shape (channelData) instead.
+function withoutPresentation(payload) {
+    const { presentation: _presentation, presentationTextMode: _mode, ...rest } = payload;
+    return rest;
+}
+// The payload with these fields added to its channelData for Octopus Prime.
+function carrying(payload, fields) {
+    const channelData = isObject(payload.channelData) ? payload.channelData : {};
+    const own = isObject(channelData[CHANNEL_DATA_KEY]) ? channelData[CHANNEL_DATA_KEY] : {};
+    return { ...payload, channelData: { ...channelData, [CHANNEL_DATA_KEY]: { ...own, ...fields } } };
+}
+/**
+ * A reply rendered for Octopus Prime, or null for core's own plain text:
+ * - an `ask_user` prompt (1.33.0), while the backend offers ask-user: its
+ *   question as an `ask` (src/questions.ts), its words the prompt as core
+ *   wrote it, which says the same;
+ * - an agent's buttons and selects (1.33.0), likewise: an `ask` of kind
+ *   buttons beside the rest of the card, or beside core's full plain text;
+ * - a card (1.32.0), while the backend offers rich-presentation.
+ */
+function renderReply(params) {
+    const { payload, presentation, sourcePresentation, accountId } = params;
+    const rich = presentationOffered(accountId);
+    const asks = askOffered(accountId);
+    if (asks && askUserQuestionId(payload)) {
+        const ask = questionAsk(payload, presentation);
+        return ask ? carrying(withoutPresentation(payload), { ask }) : null;
+    }
+    const { ask, rest } = asks ? splitControls(presentation) : { ask: undefined, rest: presentation };
+    // No control the apps act on (or none offered): the card as 1.32.0 sends
+    // it, any approval and the like as its "Actions:" line.
+    if (!ask)
+        return rich ? presentationReply({ payload, presentation: rest, sourcePresentation }) : null;
+    const card = rich && rest.blocks.length ? presentationReply({ payload, presentation: rest, sourcePresentation }) : null;
+    if (card)
+        return carrying(card, { ask });
+    return carrying({
+        ...withoutPresentation(payload),
+        text: renderMessagePresentationFallbackText({ text: payload.text, presentation: sourcePresentation ?? presentation }),
+    }, { ask });
+}
 // A reply's receipt: one message, or one per part of a long reply, in order.
 function replyReceipt(messageIds, replyToId) {
     return {
@@ -39,9 +95,13 @@ function mediaAccessOf(params) {
  * and returns core's result. A reply with files (1.11.0) first uploads them
  * (src/reply-media.ts), then names those the backend kept in its message, and
  * its text ends with the note of 1.8.0 counting the rest; it is never refused
- * or dropped for a file.
+ * or dropped for a file. A reply's card (1.32.0, src/presentation.ts) goes
+ * with it to a backend that offers rich-presentation, when the reply is one
+ * message (see the transport's sendOutboundReply), and so does its question
+ * or buttons (1.33.0, src/questions.ts) to one that offers ask-user; an
+ * `ask_user` question is then watched until it ends on the Gateway.
  */
-async function sendReply(params, text, files) {
+async function sendReply(params, text, files, presentation, ask) {
     const channelId = params.to.trim();
     if (!channelId)
         throw new Error("An Octopus Prime conversation is required");
@@ -87,6 +147,8 @@ async function sendReply(params, text, files) {
             channelId,
             text: body,
             ...kept,
+            ...(presentation ? { presentation } : {}),
+            ...(ask ? { ask } : {}),
             signal: params.signal,
             assertHandoff: params.assertDirectAdapterHandoff,
         })
@@ -96,9 +158,14 @@ async function sendReply(params, text, files) {
             channelId,
             text: body,
             ...kept,
+            ...(presentation ? { presentation } : {}),
+            ...(ask ? { ask } : {}),
             signal: params.signal,
             assertHandoff: params.assertDirectAdapterHandoff,
         });
+    if (ask?.kind === "question" && typeof ask.question_id === "string" && messageIds[0]) {
+        watchQuestion({ accountId: params.accountId, questionId: ask.question_id, messageId: messageIds[0] });
+    }
     // Core's queue settles a sent reply only after the @internal
     // onPlatformSendDispatch hook has recorded the send, so it is called
     // once the backend's receipts prove that every message of the reply
@@ -173,6 +240,21 @@ export const octopusPrimeChannel = createChatChannelPlugin({
             },
         },
         actions: octopusMessageActions,
+        // Agents' approvals answered in the apps (1.31.0, src/approvals.ts): a
+        // native approval surface for the conversation an approval was raised in,
+        // started per account by src/gateway.ts, only while its owner turned it on.
+        approvalCapability: octopusApprovalCapability({
+            request: requestApproval,
+            notify: notifyApproval,
+            newRequestId: () => `apr-${randomUUID()}`,
+        }),
+        // Inline buttons in what agents are told of the message tool (1.33.0):
+        // on while the account's backend offers ask-user, so OpenClaw stops
+        // saying "Inline buttons OFF for octopus-prime" and shows agents how to
+        // send them; their taps come back as the person's message.
+        agentPrompt: {
+            messageToolCapabilities: ({ accountId }) => (askOffered(accountId) ? ["inlineButtons"] : []),
+        },
         message: {
             // Core sends a reply's files (1.11.0) in OpenClaw 2026.9.8 and 2026.10.3
             // alike: a reply with one file through `media` (its text as the
@@ -185,15 +267,20 @@ export const octopusPrimeChannel = createChatChannelPlugin({
                     unsent: 0,
                     access: mediaAccessOf(params),
                 }),
+                // A reply rendered with a card (1.32.0, renderPresentation below)
+                // comes here too, the card in its channelData, checked again; and
+                // with a question or buttons (1.33.0), or as an `ask_user` prompt
+                // core sent as words, whose question is read here.
                 payload: async (params) => {
                     const mediaUrls = replyMediaUrls(params.payload);
                     const text = typeof params.payload.text === "string" ? params.payload.text : params.text;
+                    const ask = channelDataAsk(params.payload.channelData, CHANNEL_DATA_KEY) ?? questionAsk(params.payload);
                     return sendReply(params, text, {
                         mediaUrls,
                         // Attachments it names beyond its URLs, which core sends no file for.
                         unsent: Math.max(0, attachmentCount(params.payload) - mediaUrls.length),
                         access: mediaAccessOf(params),
-                    });
+                    }, channelDataPresentation(params.payload.channelData), ask);
                 },
             },
             durableFinal: {
@@ -251,6 +338,24 @@ export const octopusPrimeChannel = createChatChannelPlugin({
             // A reply with several files reaches message.send.payload whole, not
             // one message per file.
             sendPayloadGroupsMedia: true,
+            // Rich replies (1.32.0): cards with a title and tone, text, context
+            // lines, dividers, tables and charts. Buttons and selects only per
+            // account (1.33.0, below); otherwise core turns them into context lines
+            // ("Actions:") before rendering.
+            presentationCapabilities: PRESENTATION_CAPABILITIES,
+            // Tables and charts only while the account's backend offered
+            // rich-presentation, buttons and selects (1.33.0) only while it offered
+            // ask-user; otherwise core turns them into text first.
+            resolvePresentationCapabilities: ({ accountId }) => {
+                const offered = presentationOffered(accountId);
+                const asks = askOffered(accountId);
+                return { ...PRESENTATION_CAPABILITIES, tables: offered, charts: offered, buttons: asks, selects: asks };
+            },
+            // The card in the backend's shape, in channelData, with the full text
+            // fallback as the reply's text (src/presentation.ts), and its question
+            // or buttons (src/questions.ts); null, so core sends its own plain
+            // text, for a backend that offered neither or a card it would refuse.
+            renderPresentation: ({ payload, presentation, sourcePresentation, ctx }) => renderReply({ payload, presentation, sourcePresentation, accountId: ctx.accountId }),
         },
         attachedResults: {
             channel: SECTION,

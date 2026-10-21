@@ -2,11 +2,14 @@ import { buildAgentSessionKey } from "openclaw/plugin-sdk/core";
 import { buildChannelInboundEventContext, } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { accountAgentIds, accountEnabled, accountSection, DEFAULT_ACCOUNT_ID, normalizeAccountId, withAccountConfig, } from "./accounts.js";
+import { AGENT_WORK_INSTRUCTION } from "./agent-work.js";
+import { meetingInstruction } from "./meetings.js";
 import { AUDIT_NOTICE, forgetAuditedSession, rememberAuditedSession } from "./audited-workspace.js";
 import { rememberConversationSession } from "./channel-history.js";
-import { LOG_INSTRUCTION, rememberProjectSession, startsNewSession, withLogBookContext, } from "./log-book.js";
+import { withMissingPicturesNote } from "./inbound-media.js";
+import { LOG_INSTRUCTION, LOG_INSTRUCTION_NO_AGENT_TO_AGENT, rememberProjectSession, startsNewSession, withLogBookContext, } from "./log-book.js";
 import { resolvePinnedRuntimeConfig, sameRuntimeBinding, } from "./runtime-config.js";
-import { createTurnWatch, turnAnswered, turnFailedNotice, } from "./turn-failure.js";
+import { createTurnWatch, turnFailedNotice, } from "./turn-failure.js";
 import { machineLoadLine } from "./machine-stats.js";
 import { forgetTitledSession, rememberTitledSession } from "./session-title.js";
 import { commandsAuthorized } from "./slash-commands.js";
@@ -94,7 +97,7 @@ export function projectLog(frame) {
         label: "Octopus Prime project log",
         source: CHANNEL,
         type: "project_log",
-        payload: { instruction: LOG_INSTRUCTION },
+        payload: { instruction: frame.no_agent_to_agent === true ? LOG_INSTRUCTION_NO_AGENT_TO_AGENT : LOG_INSTRUCTION },
     };
 }
 /**
@@ -140,18 +143,54 @@ export function messageEdited(frame) {
 }
 /**
  * While the computer running the Gateway has been under heavy load for a
- * while (1.27.0, src/machine-stats.ts), each turn asks its agent to go easy,
- * naming the load. Read on the Gateway, never from the message or the
- * backend; like the entries above, a context block of its own.
+ * minute (1.27.0; 1.36.0 src/machine-stats.ts), an agent's next turn warns it,
+ * naming the load, at most once in 15 minutes (the stronger warning once more
+ * at 95% memory). Read on the Gateway, never from the message; like the
+ * entries above, a context block of its own.
  */
-export function machineLoad(stats) {
-    if (!stats)
+export function machineLoad(warning) {
+    if (!warning)
         return undefined;
     return {
         label: "Octopus Prime computer load",
         source: CHANNEL,
         type: "machine_load",
-        payload: { instruction: machineLoadLine(stats) },
+        payload: { instruction: machineLoadLine(warning.stats, warning.critical) },
+    };
+}
+/**
+ * What every turn on a connection whose backend offered `agent-work` tells
+ * its agent (1.28.0, src/agent-work.ts): it can create tasks, calendar events
+ * and projects with its three tools when someone asks. Read from the
+ * connection, never from the message; like the entries above, a context
+ * block of its own.
+ */
+export function agentWork(offered) {
+    if (!offered)
+        return undefined;
+    return {
+        label: "Octopus Prime tasks, calendar and projects",
+        source: CHANNEL,
+        type: "agent_work",
+        payload: { instruction: AGENT_WORK_INSTRUCTION },
+    };
+}
+/**
+ * What the turn of a message that sends its agent to a meeting, or asks it
+ * for that meeting's notes, tells the agent (1.29.0, src/meetings.ts): which
+ * tool joins it, in which mode, and how to report and post the notes. Only
+ * for a frame that names the meeting (`meeting`), on a connection whose
+ * backend offered meetings; like the entries above, a context block of its
+ * own: nothing typed into a message adds it.
+ */
+export function meetingTurn(frame, offered) {
+    if (!offered || !frame.meeting)
+        return undefined;
+    return {
+        label: "Octopus Prime meeting",
+        source: CHANNEL,
+        type: "meeting",
+        payload: { instruction: meetingInstruction(frame.meeting) },
     };
 }
 /**
@@ -260,16 +299,25 @@ export async function dispatchOctopusInbound(options) {
         }
         else
             forgetTitledSession(sessionKey);
-        const agentBody = await bodyForAgent(cfg, sessionKey);
+        // The message's pictures (1.35.0), downloaded now, handed to the turn as
+        // its images; any that could not be had are named after the message,
+        // whose links stay in its text.
+        const pictures = frame.files?.length ? await options.inboundMedia?.(frame, lifecycle.abortSignal) : undefined;
+        if (lifecycle.abortSignal?.aborted)
+            throw new Error("Octopus dispatch was cancelled");
+        const agentBody = withMissingPicturesNote(await bodyForAgent(cfg, sessionKey), pictures?.missing ?? []);
         // Context blocks of their own, each only for a frame that says so: the
         // sender's two-step login (1.6.0), the audited workspace (1.7.0), then the
         // project log's instruction (1.13.0), a fresh session's first message
         // (1.24.0), a message edited to mention the agent (1.26.0), the computer
-        // under heavy load (1.27.0); and, on every turn, last, where to read how
-        // the app works (1.19.0).
+        // under heavy load (1.27.0), the tools for tasks, calendar and projects
+        // where the backend offers them (1.28.0), a meeting the message sends the
+        // agent to or asks the notes of (1.29.0); and, on every turn, last, where
+        // to read how the app works (1.19.0).
         const structuredContext = [
             senderProtection(frame), workspaceAudit(frame), projectLog(frame), sessionContinuation(frame),
-            messageEdited(frame), machineLoad(options.machineLoad?.()), appHelp(),
+            messageEdited(frame), machineLoad(options.machineLoad?.()), agentWork(options.agentWork?.() === true),
+            meetingTurn(frame, options.meetings?.() === true), appHelp(),
         ].filter((entry) => entry !== undefined);
         const ctxPayload = buildChannelInboundEventContext({
             channel: CHANNEL,
@@ -308,6 +356,7 @@ export async function dispatchOctopusInbound(options) {
                 bodyForAgent: agentBody,
                 commandBody: frame.body,
             },
+            ...(pictures?.media.length ? { media: pictures.media } : {}),
             ...(structuredContext.length > 0 ? { supplemental: { channelStructuredContext: structuredContext } } : {}),
             // OpenClaw's commands (1.25.0, src/slash-commands.ts): only for the
             // agent's owner, and the managers the backend names, never an
@@ -373,13 +422,11 @@ export async function dispatchOctopusInbound(options) {
         watch.planned();
         return plan;
     };
-    // The turn's verdict (src/turn-failure.ts): a turn that answered ends its
-    // conversation's failures in a row; one that failed gets its notice.
+    // The turn's verdict (src/turn-failure.ts): one that failed gets its notice.
+    // Failures in a row are the backend's to collapse into one message (1.34.0).
     const judge = (outcome) => {
         try {
             const verdict = watch.verdict({ ...outcome, cancelled: lifecycle.abortSignal?.aborted === true });
-            if (verdict.kind === "ok" || verdict.kind === "silent")
-                turnAnswered(accountId, frame.channel_id);
             if (verdict.kind === "silent")
                 options.onTurnSilent?.();
             if (verdict.kind === "failed") {

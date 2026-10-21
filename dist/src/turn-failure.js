@@ -29,14 +29,17 @@ export const TURN_SILENT_FRAME = "turn.silent";
 export function turnSilentFrame(frame) {
     return { type: TURN_SILENT_FRAME, event_id: frame.event_id, channel_id: frame.channel_id, agent_id: frame.agent_id, reason: "no_reply" };
 }
-const TEMPORARY_TEXT = "Sorry, I hit a temporary problem and did not finish. Please send that again.";
+// What an older backend shows (a backend with the agent-reply-timeout contract
+// saves its own words for the cause instead).
+const TEMPORARY_TEXT = "Something went wrong on my side — please send that again.";
+const SETUP_TEXT = "My OpenClaw setup needs attention — the workspace owner needs to check it.";
 export const TURN_FAILED_TEXT = {
+    rate_limit: "I'm at my usage limit right now — try again in a few minutes.",
     temporary: TEMPORARY_TEXT,
-    ai_account: "This agent's AI account needs attention (billing or sign-in). The workspace owner needs to check their OpenClaw account.",
+    ai_account: SETUP_TEXT,
+    setup: SETUP_TEXT,
     unknown: TEMPORARY_TEXT,
 };
-// An unknown cause right after another failed turn of the same conversation.
-export const TURN_FAILED_SETUP_TEXT = "The workspace owner needs to check the agent's OpenClaw setup.";
 /** The notice's outbound id: `turn-failed:<event_id>`, hashed when that is too long for the backend. */
 export function turnFailedOutboundId(eventId) {
     const id = `turn-failed:${eventId}`;
@@ -44,14 +47,23 @@ export function turnFailedOutboundId(eventId) {
         return id;
     return `turn-failed:${createHash("sha256").update(eventId).digest("hex")}`;
 }
-// OpenClaw's FailoverError reasons (2026.9.8 and 2026.10.3).
+// OpenClaw's FailoverError reasons (2026.9.8 to 2026.10.4).
 const ACCOUNT_REASONS = new Set(["billing", "auth", "auth_permanent", "session_expired"]);
-const TEMPORARY_REASONS = new Set(["rate_limit", "overloaded", "server_error", "timeout", "empty_response", "tls_certificate"]);
+const SETUP_REASONS = new Set(["model_not_found"]);
+const TEMPORARY_REASONS = new Set(["overloaded", "server_error", "timeout", "empty_response", "tls_certificate"]);
 const ACCOUNT_STATUS = new Set([401, 402, 403]);
-const TEMPORARY_STATUS = new Set([408, 425, 429, 500, 502, 503, 504, 529]);
-// What core and providers write about a refused account, and about a passing problem.
-const ACCOUNT_WORDS = /billing|quota|insufficient (?:credit|balance|funds)|credit balance|out of credits|payment required|api[ _-]?key|unauthori[sz]ed|authenticat|oauth|re-?auth|sign[ -]?in|log[ -]?in|credentials? (?:expired|invalid|revoked)|token (?:expired|revoked)|\b40[12]\b/i;
-const TEMPORARY_WORDS = /timed? ?out|timeout|no output for|stalled|stopped making progress|interrupted|overloaded|temporar|service unavailable|currently unavailable|rate[ -]?limit|too many requests|try again (?:later|shortly)|econnreset|econnrefused|etimedout|socket hang up|network|\b(?:429|50[0234]|529)\b/i;
+const TEMPORARY_STATUS = new Set([408, 425, 500, 502, 503, 504, 529]);
+// Core's own words for a rate limit (2026.10.4 failover/user-copy.ts), which
+// also name "billing limits" and must not read as a refused account.
+const CORE_RATE_LIMIT_WORDS = /needs a short break|can't accept more requests|is asking us to slow down|AI services are busy/i;
+// A rate limit that is the account's money, not its pace (OpenAI's insufficient_quota).
+const BILLING_WORDS = /billing|insufficient[ _](?:quota|credit|balance|funds)|exceeded your current quota|credit balance|out of credits|payment required/i;
+// What core and providers write about a refused account, a missing model, a
+// rate or usage limit, and a passing problem.
+const ACCOUNT_WORDS = /billing|insufficient[ _](?:quota|credit|balance|funds)|exceeded your current quota|credit balance|out of credits|payment required|api[ _-]?key|unauthori[sz]ed|authenticat|oauth|re-?auth|sign[ -]?in|log[ -]?in|credentials? (?:expired|invalid|revoked)|token (?:expired|revoked)|\b40[12]\b/i;
+const SETUP_WORDS = /model (?:was )?not found|unknown model|no model (?:is )?(?:configured|selected|set)|isn't set up yet|not set up yet/i;
+const RATE_LIMIT_WORDS = /rate[ -]?limit|too many requests|usage limit|hit your (?:usage )?limit|limit (?:reached|exceeded)|\b429\b/i;
+const TEMPORARY_WORDS = /timed? ?out|timeout|no output for|stalled|stopped making progress|interrupted|overloaded|at capacity|temporar|service unavailable|currently unavailable|try again (?:later|shortly)|econnreset|econnrefused|etimedout|socket hang up|network|\b(?:50[0234]|529)\b/i;
 function record(value) {
     return value && typeof value === "object" ? value : undefined;
 }
@@ -71,8 +83,14 @@ function errorChain(error) {
     return chain;
 }
 function textCause(text) {
+    if (CORE_RATE_LIMIT_WORDS.test(text))
+        return "rate_limit";
     if (ACCOUNT_WORDS.test(text))
         return "ai_account";
+    if (SETUP_WORDS.test(text))
+        return "setup";
+    if (RATE_LIMIT_WORDS.test(text))
+        return "rate_limit";
     if (TEMPORARY_WORDS.test(text))
         return "temporary";
     return undefined;
@@ -91,9 +109,12 @@ export function classifyTurnFailure(error, failureText) {
         const message = typeof entry.message === "string" ? entry.message : "";
         if (reason && ACCOUNT_REASONS.has(reason))
             return "ai_account";
-        // A provider's "quota" is the account's, even when it comes as a rate limit.
-        if ((reason === "rate_limit" || status === 429) && ACCOUNT_WORDS.test(message))
-            return "ai_account";
+        if (reason && SETUP_REASONS.has(reason))
+            return "setup";
+        // A rate limit passes by itself, unless it is the account's money
+        // (out of credits, OpenAI's insufficient_quota).
+        if (reason === "rate_limit" || status === 429)
+            return BILLING_WORDS.test(message) ? "ai_account" : "rate_limit";
         if (reason && TEMPORARY_REASONS.has(reason))
             return "temporary";
         if (status !== undefined && ACCOUNT_STATUS.has(status))
@@ -193,10 +214,8 @@ export function createTurnWatch() {
         },
     };
 }
-// Bounds on what is remembered: conversations with failures in a row, and the
-// notice decided for each failed message.
+// A bound on what is remembered: the notice decided for each failed message.
 const MAX_REMEMBERED = 1_000;
-const failuresInARow = new Map();
 const decidedNotices = new Map();
 function remember(map, key, value) {
     map.delete(key);
@@ -204,30 +223,21 @@ function remember(map, key, value) {
     while (map.size > MAX_REMEMBERED)
         map.delete(map.keys().next().value);
 }
-/** A turn in this conversation answered: its failures are no longer in a row. */
-export function turnAnswered(accountId, channelId) {
-    failuresInARow.delete(JSON.stringify([accountId, channelId]));
-}
 /**
  * The notice for a failed turn. A message's notice is decided once: a replay
  * of the same message that fails again gets the identical notice (the backend
- * keeps one message per outbound id and refuses another body under it), and
- * counts once toward the failures in a row. An unknown cause right after
- * another failure in the same conversation asks the owner to check the
- * agent's setup. Its cause stays `unknown`: a backend with the agent-reply-timeout contract decides
- * that from its own record of the conversation and words the notice itself;
- * an older backend shows this body.
+ * keeps one message per outbound id). Its words are its cause's alone; since
+ * 1.34.0 a failure in a row is no reason to ask for the setup to be checked
+ * (that wording greeted a passing usage limit). A backend with the
+ * agent-reply-timeout contract saves its own words for the cause and folds
+ * failures in a row into one notice that counts the waiting messages.
  */
 export function turnFailedNotice(target, cause) {
     const eventKey = JSON.stringify([target.accountId, target.eventId]);
     const decided = decidedNotices.get(eventKey);
     if (decided)
         return decided;
-    const conversation = JSON.stringify([target.accountId, target.channelId]);
-    const before = failuresInARow.get(conversation) ?? 0;
-    remember(failuresInARow, conversation, before + 1);
-    const body = cause === "unknown" && before > 0 ? TURN_FAILED_SETUP_TEXT : TURN_FAILED_TEXT[cause];
-    const notice = { outboundId: turnFailedOutboundId(target.eventId), cause, body };
+    const notice = { outboundId: turnFailedOutboundId(target.eventId), cause, body: TURN_FAILED_TEXT[cause] };
     remember(decidedNotices, eventKey, notice);
     return notice;
 }

@@ -12,9 +12,11 @@ export const CONVERSATION_ID = /^(?:ch|dm)_[A-Za-z0-9_-]{1,125}$/;
  * never wakes an agent or sends a push. It goes through the connector of the
  * account core names, the one whose message the agent is answering (core
  * allows a reaction only where that is the requester's account too).
+ * Since 1.32.0 it also offers the tool's `presentation` parameter, so an
+ * agent's send can carry a card, table or chart (src/presentation.ts).
  */
 export const octopusMessageActions = {
-    describeMessageTool: () => ({ actions: ["react"] }),
+    describeMessageTool: () => ({ actions: ["react"], capabilities: ["presentation"] }),
     supportsAction: ({ action }) => action === "react",
     handleAction: async (ctx) => {
         if (ctx.action !== "react")

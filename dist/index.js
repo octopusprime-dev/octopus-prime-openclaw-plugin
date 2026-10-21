@@ -10,14 +10,19 @@
  * organizations (src/accounts.ts).
  */
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { CALENDAR_TOOL, PROJECTS_TOOL, TASKS_TOOL } from "./src/agent-work.js";
+import { createAgentWorkTool } from "./src/agent-work-tool.js";
 import { AUDIT_TOOL } from "./src/audited-workspace.js";
 import { createAuditTool } from "./src/audited-workspace-tool.js";
+import { BACKUP_TOOL } from "./src/backup.js";
+import { createBackupTool } from "./src/backup-tool.js";
 import { octopusPrimeChannel } from "./src/channel.js";
 import { CHANNEL_HISTORY_TOOL } from "./src/channel-history.js";
 import { createChannelHistoryTool } from "./src/channel-history-tool.js";
 import { bindGatewayHost, stopAccountTransport } from "./src/gateway.js";
 import { LOG_BOOK_TOOL } from "./src/log-book.js";
 import { createLogBookTool } from "./src/log-book-tool.js";
+import { MEETING_TOOL } from "./src/meetings.js";
 import { FOLDER_TOOL } from "./src/project-folder.js";
 import { createFolderTool } from "./src/project-folder-tool.js";
 import { SESSION_TITLE_TOOL } from "./src/session-title.js";
@@ -28,13 +33,14 @@ export default defineChannelPluginEntry({
     description: "Secure outbound connector to the Octopus Prime communication backend.",
     plugin: octopusPrimeChannel,
     registerCliMetadata(api) {
-        api.registerCli(({ program }) => {
-            program
-                .command("octopus-prime")
-                .description("Octopus Prime connector management");
+        // `openclaw octopus-prime backup <setup|status|now|estimate|restore|passphrase>`
+        // (src/backup-cli.ts, 1.38.0), loaded only when the CLI asks for the command.
+        api.registerCli(async ({ program, config }) => {
+            const { cliEnvironment, registerOctopusCli } = await import("./src/backup-cli.js");
+            registerOctopusCli(program, () => cliEnvironment(config));
         }, {
             descriptors: [
-                { name: "octopus-prime", description: "Octopus Prime connector management", hasSubcommands: false },
+                { name: "octopus-prime", description: "Octopus Prime connector management", hasSubcommands: true },
             ],
         });
     },
@@ -58,6 +64,20 @@ export default defineChannelPluginEntry({
         // conversation a person started with the agent), on a connection whose
         // backend offered session titles.
         api.registerTool((ctx) => createSessionTitleTool(ctx), { name: SESSION_TITLE_TOOL });
+        // The tools for tasks, calendar events and projects (src/agent-work-tool.ts,
+        // 1.28.0), likewise; their factories offer them only in a turn of a
+        // conversation the plugin dispatched, on a connection whose backend
+        // offered agent-work.
+        api.registerTool((ctx) => createAgentWorkTool("tasks", ctx), { name: TASKS_TOOL });
+        api.registerTool((ctx) => createAgentWorkTool("calendar", ctx), { name: CALENDAR_TOOL });
+        api.registerTool((ctx) => createAgentWorkTool("projects", ctx), { name: PROJECTS_TOOL });
+        // The meeting tool (src/meetings.ts, 1.29.0), likewise, on a connection
+        // whose backend offered meetings too.
+        api.registerTool((ctx) => createAgentWorkTool("meetings", ctx), { name: MEETING_TOOL });
+        // Agent Backup's tool (src/backup-tool.ts, 1.38.0): its estimate works on
+        // any Gateway with a config, before any plan is bought; its status asks
+        // the account's backend, on a connection that offered agent-backup.
+        api.registerTool((ctx) => createBackupTool(ctx), { name: BACKUP_TOOL });
         if (api.registrationMode !== "full")
             return;
         bindGatewayHost(api);

@@ -36,9 +36,18 @@ export const ENTRY_MAX_CHARS = 4_000;
 // the project's Agent To Agent channel.
 export const AGENT_TO_AGENT_INSTRUCTION = "To ask another agent for work in this project, post in #Agent To Agent and "
     + "@mention it by its full name; agents don't wake each other in other channels.";
-export const LOG_INSTRUCTION = "If this turn moved the project forward (work done, decision, blocker, handoff), add one "
+const LOG_ENTRY_INSTRUCTION = "If this turn moved the project forward (work done, decision, blocker, handoff), add one "
     + `short entry to the project log with ${LOG_BOOK_TOOL} before you finish; if you marked something done or blocked, `
-    + `also add an entry to MILESTONES.md. ${AGENT_TO_AGENT_INSTRUCTION}`;
+    + "also add an entry to MILESTONES.md.";
+export const LOG_INSTRUCTION = `${LOG_ENTRY_INSTRUCTION} ${AGENT_TO_AGENT_INSTRUCTION}`;
+// Since 1.37.0 a project's people can remove its Agent To Agent channel. A
+// backend that knows says so in the frame (`no_agent_to_agent`), and the second
+// sentence says where to ask then, instead of pointing at a channel that is not
+// there (the apps' etiquette prompt says the same, in its words).
+export const NO_AGENT_TO_AGENT_INSTRUCTION = "This project has no Agent To Agent channel now, so agents can't wake each other "
+    + "here. To ask another agent for work, tell the person in this project's Strategize channel or in your direct message "
+    + "with them what you need; they can ask that agent or add Agent To Agent back.";
+export const LOG_INSTRUCTION_NO_AGENT_TO_AGENT = `${LOG_ENTRY_INSTRUCTION} ${NO_AGENT_TO_AGENT_INSTRUCTION}`;
 export const READ_FRAME = "log_book.read";
 export const APPEND_FRAME = "log_book.append";
 const CHANNEL = "octopus-prime";

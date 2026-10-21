@@ -18,18 +18,28 @@ import { createIngressOrigin } from "./ingress-origin.js";
 import { accountAgentIds, accountEnabled, accountSection, DEFAULT_ACCOUNT_ID, listConnectorAccountIds, logPrefix, normalizeAccountId, } from "./accounts.js";
 import { resolvePinnedRuntimeConfig, sameRuntimeBinding, } from "./runtime-config.js";
 import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { isApprovalNotFoundError, PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { REJECTED_FRAME as WORK_REJECTED, RESULT_FRAME as WORK_RESULT, } from "./agent-work.js";
+import { CONFIG_FRAME as APPROVALS_CONFIG, DECIDE_FRAME as APPROVAL_DECIDE, HELLO_FRAME as APPROVALS_HELLO, REQUEST_REJECTED as APPROVAL_REJECTED, REQUEST_RESULT as APPROVAL_RESULT, configEnabled, decideApproval, setApprovalsEnabled, } from "./approvals.js";
+import { postBackupFrame, RUN_FRAME as BACKUP_RUN_FRAME } from "./backup.js";
+import { createGatewayBackup } from "./backup-gateway.js";
 import { REJECTED_FRAME as HISTORY_REJECTED, RESULT_FRAME as HISTORY_RESULT, } from "./channel-history.js";
 import { FLUSH_WAIT_MS, REJECTED_FRAME as RESET_REJECTED, RESET_FRAME, RESULT_FRAME as RESET_RESULT, ALLOW_COMMAND, requestGatewayRestart, resetRequestId, takeReset, } from "./gateway-reset.js";
 import { dispatchOctopusInbound, octopusSessionKey } from "./host-dispatch.js";
+import { loadInboundPictures } from "./inbound-media.js";
 import { createOctopusIngress } from "./ingress.js";
 import { logBookAnswer, READ_FRAME } from "./log-book.js";
 import { MESSAGE_EDITED_FRAME, noteMessageEdited, parseMessageEdited } from "./message-edited.js";
-import { hostCommandRunner, machineSampler, machineStatsShared } from "./machine-stats.js";
+import { BUSY_SAMPLE_EVERY_MS, hostCommandRunner, loadProtectionOf, machineSampler, machineStatsShared, } from "./machine-stats.js";
+import { MeetingDueTimers, meetingsReport, REPORT_FRAME as MEETINGS_REPORT_FRAME } from "./meetings.js";
 import { folderBody, REJECTED_FRAME as FOLDER_REJECTED, RESULT_FRAME as FOLDER_RESULT } from "./project-folder.js";
-import { assertProtocolWelcome, CHANNEL_HISTORY_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
+import { ANSWER_FRAME, answerResultFrame, closedFrame, parseQuestionAnswer, resolveAnswer, } from "./questions.js";
+import { AGENT_APPROVALS_CAPABILITY, AGENT_USAGE_CAPABILITY, AGENT_WORK_CAPABILITY, ASK_USER_CAPABILITY, assertProtocolWelcome, BACKUP_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, INBOUND_MEDIA_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, MEETINGS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, RICH_PRESENTATION_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
 import { readSessionEntry, readSessionStats, sessionStatsFrame } from "./session-stats.js";
 import { commandsReport } from "./slash-commands.js";
+import { turnUsage, usageFrame, UsageMemory } from "./usage.js";
 import { REJECTED_FRAME as TITLE_REJECTED, RESULT_FRAME as TITLE_RESULT, } from "./session-title.js";
 import { loadReplyFile, MAX_REPLY_FILE_BYTES, MAX_REPLY_FILES, } from "./reply-media.js";
 import { OUTBOUND_FRAME_MAX_BYTES, OUTBOUND_ID_MAX_LENGTH, REPLY_PART_MAX_CHARS, replyPartOutboundId, splitReply, splitReplyFrom, wholeReplySave, } from "./reply-parts.js";
@@ -139,6 +149,22 @@ export class SessionTitleRefusedError extends Error {
         this.reason = reason;
     }
 }
+/**
+ * The backend refused a task, calendar or project request (1.28.0), with its
+ * reason and, when it gave them, its sentence and the app's code
+ * (src/agent-work.ts refusalMessage).
+ */
+export class AgentWorkRefusedError extends Error {
+    reason;
+    detail;
+    code;
+    constructor(reason, detail, code) {
+        super(`Backend refused the request: ${reason}`);
+        this.reason = reason;
+        this.detail = detail;
+        this.code = code;
+    }
+}
 /** The backend refused an auditor's read, with its reason (src/audited-workspace.ts refusalMessage). */
 export class AuditRefusedError extends Error {
     reason;
@@ -193,6 +219,24 @@ const silenceSockets = new WeakSet();
 const titleSockets = new WeakSet();
 // Sockets whose backend offered machine-stats in its welcome (1.27.0).
 const machineSockets = new WeakSet();
+// Sockets whose backend offered tasks, calendar and projects in its welcome (1.28.0).
+const workSockets = new WeakSet();
+// Sockets whose backend offered meetings in its welcome (1.29.0).
+const meetingSockets = new WeakSet();
+// Sockets whose backend offered agent usage in its welcome (1.30.0).
+const usageSockets = new WeakSet();
+// Sockets whose backend offered agents' approvals in its welcome (1.31.0).
+const approvalSockets = new WeakSet();
+// Sockets whose backend offered rich-presentation in its welcome (1.32.0).
+const presentationSockets = new WeakSet();
+// Sockets whose backend offered ask-user in its welcome (1.33.0).
+const askSockets = new WeakSet();
+// Sockets whose backend offered inbound-media in its welcome (1.35.0).
+const mediaSockets = new WeakSet();
+// Sockets whose backend offered Agent Backup in its welcome (1.38.0).
+const backupSockets = new WeakSet();
+// Whether a reply carries a card or a question beside its words.
+const hasExtras = (params) => params.presentation !== undefined || params.ask !== undefined;
 // How many messages whose turn ended in silence an account remembers, to settle
 // them again when the backend offers one again.
 const REMEMBERED_SILENT_TURNS = 1_000;
@@ -207,8 +251,10 @@ export function createTransportInboundHandler(options) {
         if (!data || typeof data !== "object")
             throw new Error("Connector frame is not an object");
         const frame = data;
-        if (frame.type === "pong")
+        if (frame.type === "pong") {
+            options.onPong?.(frame);
             return;
+        }
         if (frame.type === "welcome") {
             assertProtocolWelcome(frame);
             await options.onWelcome(frame);
@@ -380,6 +426,56 @@ export function requestSessionTitle(request, options = {}) {
 export function sessionTitleOffered(accountId) {
     return transportFor(accountId).titleOffered();
 }
+/** Sends a task, calendar or project request through the connector of its account (see the account transport's requestAgentWork). */
+export function requestAgentWork(request, options = {}) {
+    return transportFor(options.accountId).requestAgentWork(request, options);
+}
+/** Whether an account's connection is to a backend that offered tasks, calendar and projects (1.28.0). */
+export function agentWorkOffered(accountId) {
+    return transportFor(accountId).workOffered();
+}
+/** Whether an account's connection is to a backend that offered meetings (1.29.0). */
+export function meetingsOffered(accountId) {
+    return transportFor(accountId).meetingsOffered();
+}
+/** Forwards an approval through the connector of its account (see the account transport's requestApproval). */
+export function requestApproval(accountId, frame) {
+    return transportFor(accountId).requestApproval(frame);
+}
+/** Tells the backend, through the connector of its account, that an approval was settled. */
+export function notifyApproval(accountId, frame) {
+    transportFor(accountId).notifyApproval(frame);
+}
+/** Whether an account's connection is to a backend that offered rich-presentation (1.32.0). */
+export function presentationOffered(accountId) {
+    return transportFor(accountId).presentationOffered();
+}
+/** Whether an account's connection is to a backend that offered ask-user (1.33.0, src/questions.ts). */
+export function askOffered(accountId) {
+    return transportFor(accountId).askOffered();
+}
+/**
+ * Watches an `ask_user` question an account's reply carried (1.33.0) until it
+ * ends on the Gateway (OpenClaw's question channel runtime calls back once,
+ * with its status line), then tells that account's backend, if its current
+ * connection offered ask-user: `question.closed` for the message.
+ */
+export function watchQuestion(params) {
+    transportFor(params.accountId).watchQuestion(params.questionId, params.messageId);
+}
+/**
+ * Sends an Agent Backup call (1.38.0, src/backup.ts) through the connector of
+ * its account: POST /api/connector/backup with its credential, only to a
+ * backend whose welcome on the current connection offered agent-backup. A
+ * `backup.rejected` throws BackupRefusedError with its reason.
+ */
+export function requestBackup(frame, options = {}) {
+    return transportFor(options.accountId).requestBackup(frame, options);
+}
+/** Whether an account's connection is to a backend that offered Agent Backup (1.38.0). */
+export function backupOffered(accountId) {
+    return transportFor(accountId).backupOffered();
+}
 /** Sends an auditor's read through the connector of its account. */
 export function requestAudit(request, options = {}) {
     return transportFor(options.accountId).requestAudit(request, options);
@@ -387,7 +483,7 @@ export function requestAudit(request, options = {}) {
 function outboundKey(kind, outboundId) {
     return `${kind}:${outboundId}`;
 }
-function outboundFrame(target, body, place, notice, progress, attachments) {
+function outboundFrame(target, body, place, notice, progress, attachments, extras) {
     return {
         type: "message.outbound",
         outbound_id: target.outboundId,
@@ -402,10 +498,14 @@ function outboundFrame(target, body, place, notice, progress, attachments) {
         ...(progress ? { progress: true } : {}),
         // The reply's files the backend kept (1.11.0), on its last part only.
         ...(attachments?.length ? { attachments: [...attachments] } : {}),
+        // The reply's card (1.32.0) and its question or buttons (1.33.0), on a
+        // reply that is one frame only.
+        ...(extras?.presentation ? { presentation: extras.presentation } : {}),
+        ...(extras?.ask ? { ask: extras.ask } : {}),
     };
 }
 // A post with no message to answer (1.10.0), in the parts a reply has.
-function postFrame(target, body, place, attachments) {
+function postFrame(target, body, place, attachments, extras) {
     return {
         type: "message.post",
         post_id: target.postId,
@@ -413,7 +513,29 @@ function postFrame(target, body, place, attachments) {
         body,
         ...(place ? { reply_id: place.replyId, part: place.part, parts: place.parts } : {}),
         ...(attachments?.length ? { attachments: [...attachments] } : {}),
+        ...(extras?.presentation ? { presentation: extras.presentation } : {}),
+        ...(extras?.ask ? { ask: extras.ask } : {}),
     };
+}
+// What a reply of `bodies` carries beside its words (ReplyExtras): only a
+// reply that is one frame, and only what keeps that frame within
+// OUTBOUND_FRAME_MAX_BYTES, measured as the largest it can be (the longest
+// files list, progress), so a resend of the same reply decides the same: the
+// card and the `ask`, else the `ask` alone, else the card alone, else none.
+function frameExtras(bodies, extras, frame) {
+    if (bodies.length !== 1)
+        return {};
+    const fits = (candidate) => Buffer.byteLength(JSON.stringify(frame(bodies[0], candidate))) <= OUTBOUND_FRAME_MAX_BYTES;
+    const { presentation, ask } = extras;
+    for (const candidate of [{ presentation, ask }, { ask }, { presentation }]) {
+        const kept = {
+            ...(candidate.presentation ? { presentation: candidate.presentation } : {}),
+            ...(candidate.ask ? { ask: candidate.ask } : {}),
+        };
+        if ((kept.presentation || kept.ask) && fits(kept))
+            return kept;
+    }
+    return {};
 }
 // The longest `attachments` a frame may carry: as many file ids as a message
 // holds, each as long as the backend takes. Room for it is left in every part
@@ -472,6 +594,12 @@ function createAccountTransport(accountId) {
     let backendUrl = "";
     let token = "";
     let heartbeat = null;
+    // Reads the machine every 10 seconds at most while it is busy (1.36.0,
+    // src/machine-stats.ts); the sampler keeps it to every 20 otherwise.
+    let machineTimer = null;
+    // Computer load protection for this Gateway (1.36.0): on unless the
+    // backend's welcome or a pong says `load_protection: false`.
+    let loadProtection = true;
     let silenceTimer = null;
     let reconnectTimer = null;
     let retry = 0;
@@ -493,15 +621,33 @@ function createAccountTransport(accountId) {
     let restartGateway = requestGatewayRestart;
     let loadCommandRegistry;
     let sampler;
+    let resolveApproval = (params) => resolveApprovalOverGateway({
+        cfg: params.cfg, approvalId: params.approvalId, decision: params.decision, approvalKind: params.approvalKind,
+        ...(params.gatewayRuntime
+            ? { gatewayRuntime: params.gatewayRuntime }
+            : {}),
+    });
+    // OpenClaw's question API (1.33.0, src/questions.ts).
+    let resolveQuestion = questionGatewayRuntime.resolveOption;
+    let registerQuestion = questionGatewayRuntime.registerChannelDelivery;
+    // Agent Backup (1.38.0): this account's schedule, running while its socket's backend offers it.
+    let backupDeps;
+    let backupScheduler = null;
     const pendingOutbound = new Map();
     const activeOutboundRequests = new Map();
     const readinessWaiters = new Set();
     // The turns running now, by the event id of the message each answers.
     const activeTurns = new Map();
+    // The meetings this account's agents were sent to, each asking for its
+    // notes when it should be over (1.29.0, src/meetings.ts).
+    const dueTimers = new MeetingDueTimers((frame) => sendMeetingFrame(frame));
     // The turns that ended in silence by the agent's choice (1.17.0), by the event
     // id of the message each answered: settled again if the backend offers the
     // message again, e.g. when the frame was lost with a closing socket.
     const silentTurns = new Map();
+    // The usage last reported for each session (1.30.0, src/usage.ts), so a
+    // row the turn did not change is not reported twice.
+    const usageMemory = new UsageMemory();
     function start(api, cfg, deps) {
         if (ingress || ws || initializeIngress)
             throw new Error("Octopus Prime transport is already started");
@@ -513,6 +659,11 @@ function createAccountTransport(accountId) {
         loadFile = deps.loadReplyFile ?? loadReplyFile;
         restartGateway = deps.requestRestart ?? requestGatewayRestart;
         loadCommandRegistry = deps.loadCommandRegistry;
+        if (deps.resolveApproval)
+            resolveApproval = deps.resolveApproval;
+        resolveQuestion = deps.resolveQuestion ?? questionGatewayRuntime.resolveOption;
+        registerQuestion = deps.registerQuestionDelivery ?? questionGatewayRuntime.registerChannelDelivery;
+        backupDeps = deps.backup;
         const machine = deps.machineSampler ?? machineSampler(hostCommandRunner(api.runtime?.system));
         sampler = machine;
         hostApi = api;
@@ -534,7 +685,14 @@ function createAccountTransport(accountId) {
             origin,
             dispatch: async (frame, lifecycle) => {
                 assertCurrentIngressScope(origin, generation);
+                // A message that sends an agent to a meeting: its notes are asked
+                // for when the meeting should be over, whatever the turn does.
+                if (frame.meeting?.phase === "join" && frame.meeting.ends_at && meetingsHere()) {
+                    dueTimers.arm({ meeting_id: frame.meeting.meeting_id, channel_id: frame.channel_id,
+                        agent_id: frame.agent_id, ends_at: frame.meeting.ends_at });
+                }
                 const working = workingStatus(frame.event_id, generation);
+                const startedAt = Date.now();
                 let failed;
                 let silent = false;
                 const turn = { replying: false, replied: false };
@@ -559,7 +717,11 @@ function createAccountTransport(accountId) {
                             else
                                 turn.replied = true;
                         },
-                        machineLoad: () => machine.heavy(),
+                        // Off for this Gateway: no warning, and none counted (1.36.0).
+                        machineLoad: () => (loadProtection ? machine.warnFor(frame.agent_id) : undefined),
+                        agentWork: () => workOffered(),
+                        meetings: () => meetingsHere(),
+                        inboundMedia: (current, signal) => framePictures(api, current, signal),
                     });
                 }
                 finally {
@@ -574,6 +736,7 @@ function createAccountTransport(accountId) {
                         sendTurnSilent(frame, generation);
                 }
                 reportSessionStats(frame, generation);
+                reportTurnUsage(frame, generation, startedAt);
             },
             onError: (error) => api.logger.error(`${log} ingress error: ${String(error)}`),
         });
@@ -592,12 +755,17 @@ function createAccountTransport(accountId) {
         if (heartbeat)
             clearInterval(heartbeat);
         heartbeat = null;
+        if (machineTimer)
+            clearInterval(machineTimer);
+        machineTimer = null;
         if (silenceTimer)
             clearTimeout(silenceTimer);
         silenceTimer = null;
         if (reconnectTimer)
             clearTimeout(reconnectTimer);
         reconnectTimer = null;
+        dueTimers.clear();
+        stopBackup();
         try {
             ws?.close();
         }
@@ -742,6 +910,27 @@ function createAccountTransport(accountId) {
             hostApi?.logger.warn(`${log} session stats were not reported: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
+    /**
+     * Once a turn completed, reports its tokens, model and cost (src/usage.ts)
+     * on the current socket, if that socket's backend offered agent-usage. Best
+     * effort, like the session stats: no receipt is awaited and nothing is
+     * retried, and a failure here never touches the turn or its reply.
+     */
+    function reportTurnUsage(frame, generation, startedAt) {
+        const socket = ws;
+        if (transportGeneration !== generation || stopped || !negotiated || !socket
+            || socket.readyState !== WebSocket.OPEN || !usageSockets.has(socket))
+            return;
+        try {
+            const sessionKey = octopusSessionKey(frame.agent_id, frame.channel_id, accountId);
+            const usage = turnUsage(readEntry({ agentId: frame.agent_id, sessionKey }), startedAt, sessionKey, usageMemory);
+            if (usage)
+                socket.send(JSON.stringify(usageFrame(frame.event_id, frame.agent_id, usage)));
+        }
+        catch (error) {
+            hostApi?.logger.warn(`${log} turn usage was not reported: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     function scheduleReconnect(reason) {
         if (stopped)
             return;
@@ -800,19 +989,44 @@ function createAccountTransport(accountId) {
                 reportingCommands = false;
             }
         };
+        // This Gateway's meeting plugins (1.29.0, src/meetings.ts), reported only
+        // to a backend whose welcome offered meetings: on connect, then at the
+        // first heartbeat after they change in OpenClaw's config.
+        let reportedMeetings = "";
+        const reportMeetings = () => {
+            if (!meetingSockets.has(socket) || ws !== socket || stopped)
+                return;
+            try {
+                const report = meetingsReport(currentAgentConfig());
+                const snapshot = JSON.stringify(report);
+                if (snapshot === reportedMeetings)
+                    return;
+                sendOnSocket({ type: MEETINGS_REPORT_FRAME, ...report });
+                reportedMeetings = snapshot;
+            }
+            catch {
+                // Not this time (the socket is closing, or the config cannot be read): the next beat tries again.
+            }
+        };
         // Runs once per socket: on its close event, or when it is found silent.
         const releaseSocket = (reason) => {
             if (ws !== socket)
                 return;
             announcedAgentIds.clear();
             negotiated = false;
+            // No approval is forwarded while disconnected: it stays on OpenClaw's other surfaces.
+            setApprovalsEnabled(accountId, false);
             connectorUnavailableSince ??= Date.now();
             if (heartbeat)
                 clearInterval(heartbeat);
             heartbeat = null;
+            if (machineTimer)
+                clearInterval(machineTimer);
+            machineTimer = null;
             if (silenceTimer)
                 clearTimeout(silenceTimer);
             silenceTimer = null;
+            stopBackup();
             ws = null;
             rejectPendingOutbound(new ConnectorSocketClosedError("Connector socket closed before backend receipt"));
             wakeReadinessWaiters();
@@ -853,6 +1067,12 @@ function createAccountTransport(accountId) {
             send: sendOnSocket,
             isNegotiated: () => ws === socket && !stopped && negotiated,
             isAgentAllowed: (agentId) => announcedAgentIds.has(agentId) && currentAgentAnnouncement().some((agent) => agent.id === agentId),
+            // A change of Computer load protection reaches this side with the next pong (1.36.0).
+            onPong: (pong) => {
+                const said = loadProtectionOf(pong);
+                if (said !== undefined && ws === socket && !stopped)
+                    loadProtection = said;
+            },
             onWelcome: async (welcome) => {
                 const generation = transportGeneration;
                 if (!generation || ws !== socket || stopped)
@@ -893,9 +1113,38 @@ function createAccountTransport(accountId) {
                     titleSockets.add(socket);
                 if (welcomeOffers(welcome, MACHINE_STATS_CAPABILITY))
                     machineSockets.add(socket);
+                if (welcomeOffers(welcome, AGENT_WORK_CAPABILITY))
+                    workSockets.add(socket);
+                if (welcomeOffers(welcome, MEETINGS_CAPABILITY))
+                    meetingSockets.add(socket);
+                if (welcomeOffers(welcome, AGENT_USAGE_CAPABILITY))
+                    usageSockets.add(socket);
+                // Agents' approvals (1.31.0, src/approvals.ts): off on every new
+                // connection until its backend says the owner turned them on.
+                setApprovalsEnabled(accountId, false);
+                if (welcomeOffers(welcome, AGENT_APPROVALS_CAPABILITY)) {
+                    approvalSockets.add(socket);
+                    sendOnSocket({ type: APPROVALS_HELLO });
+                }
+                if (welcomeOffers(welcome, RICH_PRESENTATION_CAPABILITY))
+                    presentationSockets.add(socket);
+                if (welcomeOffers(welcome, ASK_USER_CAPABILITY))
+                    askSockets.add(socket);
+                if (welcomeOffers(welcome, INBOUND_MEDIA_CAPABILITY))
+                    mediaSockets.add(socket);
+                // Agent Backup (1.38.0): this account's schedule runs while this socket does.
+                if (welcomeOffers(welcome, BACKUP_CAPABILITY)) {
+                    backupSockets.add(socket);
+                    startBackup();
+                }
                 reportsCommands = welcomeOffers(welcome, SLASH_COMMANDS_CAPABILITY);
-                // A first reading, so the first heartbeat has one (src/machine-stats.ts).
+                loadProtection = loadProtectionOf(welcome) ?? true;
+                // A first reading, so the first heartbeat has one, then one every 10
+                // seconds while the machine is busy (src/machine-stats.ts).
                 void sampler?.refresh();
+                if (machineTimer)
+                    clearInterval(machineTimer);
+                machineTimer = setInterval(() => { void sampler?.refresh(); }, BUSY_SAMPLE_EVERY_MS);
                 negotiated = true;
                 connectorUnavailableSince = null;
                 retry = 0;
@@ -917,6 +1166,7 @@ function createAccountTransport(accountId) {
                         }
                         if (commandHeartbeats++ % COMMANDS_CHECK_HEARTBEATS === 0)
                             void reportCommands();
+                        reportMeetings();
                         const version = hostOpenClawVersion();
                         const machine = machineSockets.has(socket) ? sharedMachineStats() : undefined;
                         sendOnSocket({
@@ -935,12 +1185,18 @@ function createAccountTransport(accountId) {
                     commandHeartbeats = 1;
                     void reportCommands();
                 }
+                reportMeetings();
                 wakeReadinessWaiters();
             },
             onControlFrame: (frame) => (frame.type === RESET_FRAME ? handleGatewayReset(frame, sendOnSocket)
                 : frame.type === MESSAGE_EDITED_FRAME ? handleMessageEdited(frame, (agentId) => announcedAgentIds.has(agentId)
                     && currentAgentAnnouncement().some((agent) => agent.id === agentId))
-                    : handleOutboundControlFrame(frame)),
+                    : frame.type === APPROVALS_CONFIG || frame.type === APPROVAL_DECIDE
+                        ? handleApprovalFrame(frame, socket, sendOnSocket)
+                        : frame.type === ANSWER_FRAME ? handleQuestionAnswer(frame, (agentId) => announcedAgentIds.has(agentId)
+                            && currentAgentAnnouncement().some((agent) => agent.id === agentId))
+                            : frame.type === BACKUP_RUN_FRAME ? handleBackupRun(socket)
+                                : handleOutboundControlFrame(frame)),
             onOffered: (eventId) => settleSilentTurn(socket, eventId),
         });
         socket.on("open", () => {
@@ -1034,9 +1290,10 @@ function createAccountTransport(accountId) {
     }
     // The machine's latest reading, unless the Gateway's owner turned sharing it
     // off (1.27.0, src/machine-stats.ts); a config that cannot be read sends none.
+    // With it (1.36.0) whether the load is heavy and the agents warned in this run.
     function sharedMachineStats() {
         try {
-            return machineStatsShared(currentAgentConfig()) ? sampler?.latest() : undefined;
+            return machineStatsShared(currentAgentConfig()) ? sampler?.report() : undefined;
         }
         catch {
             return undefined;
@@ -1246,6 +1503,12 @@ function createAccountTransport(accountId) {
         return true;
     }
     function handleOutboundControlFrame(frame) {
+        if (frame.type === APPROVAL_RESULT || frame.type === APPROVAL_REJECTED) {
+            const requestId = typeof frame.request_id === "string" ? frame.request_id : "";
+            if (!requestId)
+                return false;
+            return settlePending(outboundKey("approval", requestId), { status: "approval", frame });
+        }
         if (frame.type === "message.post.receipt" || frame.type === "message.post.refused") {
             const postId = typeof frame.post_id === "string" ? frame.post_id : "";
             if (!postId)
@@ -1323,6 +1586,13 @@ function createAccountTransport(accountId) {
             const reason = typeof frame.reason === "string" ? frame.reason : "rejected";
             return settlePending(outboundKey("title", outboundId), new SessionTitleRefusedError(reason));
         }
+        if (frame.type === WORK_RESULT) {
+            return settlePending(outboundKey("work", outboundId), { status: "agent_work", frame });
+        }
+        if (frame.type === WORK_REJECTED) {
+            const reason = typeof frame.reason === "string" ? frame.reason : "rejected";
+            return settlePending(outboundKey("work", outboundId), new AgentWorkRefusedError(reason, typeof frame.detail === "string" ? frame.detail : undefined, typeof frame.code === "string" ? frame.code : undefined));
+        }
         return false;
     }
     async function sendOutbound(params) {
@@ -1333,7 +1603,7 @@ function createAccountTransport(accountId) {
         // not ready within the wait window (or a host runtime that is not up yet)
         // throws the SDK's retryable not-dispatched marker so core keeps the queued
         // reply and retries it.
-        const result = await requestOutbound("send", params.outboundId, outboundFrame(params, params.body, params.place, params.notice, params.progress, params.attachments), { signal: params.signal, assertHandoff: params.assertHandoff });
+        const result = await requestOutbound("send", params.outboundId, outboundFrame(params, params.body, params.place, params.notice, params.progress, params.attachments, { presentation: params.presentation, ask: params.ask }), { signal: params.signal, assertHandoff: params.assertHandoff });
         if (result.status !== "sent")
             throw new Error("Backend did not accept outbound intent");
         return result.messageId;
@@ -1356,13 +1626,17 @@ function createAccountTransport(accountId) {
         const limits = partLimits(params.postId, (longest, place) => postFrame({ ...params, postId: longest }, "", place, longestAttachments(params.attachments)));
         let bodies = splitReply(params.text, limits);
         let files = params.attachments?.length ? params.attachments : undefined;
+        // The post's card (1.32.0) and its question or buttons (1.33.0), each only
+        // to a backend that offered it now.
+        const offered = offeredExtras(params);
         const messageIds = [];
         for (let index = 0; index < bodies.length; index += 1) {
             const postId = replyPartOutboundId(params.postId, index);
             const place = bodies.length > 1 ? { replyId: params.postId, part: index + 1, parts: bodies.length } : undefined;
             const named = index === bodies.length - 1 ? files : undefined;
+            const extras = frameExtras(bodies, offered, (body, candidate) => postFrame(params, body, undefined, longestAttachments(params.attachments), candidate));
             try {
-                const result = await requestOutbound("post", postId, postFrame({ postId, channelId: params.channelId }, bodies[index], place, named), { signal: params.signal, assertHandoff: params.assertHandoff });
+                const result = await requestOutbound("post", postId, postFrame({ postId, channelId: params.channelId }, bodies[index], place, named, extras), { signal: params.signal, assertHandoff: params.assertHandoff });
                 if (result.status !== "sent")
                     throw new Error("Backend did not accept the post");
                 messageIds.push(result.messageId);
@@ -1375,10 +1649,12 @@ function createAccountTransport(accountId) {
                     index -= 1;
                     continue;
                 }
-                if (params.attachments !== undefined && error instanceof PostRefusedError && error.reason === "identity_conflict") {
+                if ((params.attachments !== undefined || (hasExtras(params) && bodies.length === 1))
+                    && error instanceof PostRefusedError && error.reason === "identity_conflict") {
                     const saved = await reconcileOutbound(postId);
                     if (saved.status === "sent") {
-                        // Core sent this post again and a file's outcome changed since: the
+                        // Core sent this post again and a file's outcome, or whether its
+                        // card (1.32.0) or question (1.33.0) was sent, changed since: the
                         // message saved the first time stands for this part.
                         messageIds.push(saved.messageId);
                         continue;
@@ -1417,6 +1693,11 @@ function createAccountTransport(accountId) {
      * answered only at the last part. A reply that fits in one message goes out
      * exactly as before, with none of them.
      *
+     * A reply's card (1.32.0, `presentation`) goes on its frame only when the
+     * reply is that one message and the frame with it fits, and only to a
+     * backend that offered rich-presentation; never on a part. The text, the
+     * card's full fallback, says everything either way.
+     *
      * Sent while this connector's turn for that message runs and before core
      * hands the channel the turn's reply (the agent's message tool, 1.10.0), it
      * is the agent's progress: every frame says `progress: true`, the backend
@@ -1435,11 +1716,15 @@ function createAccountTransport(accountId) {
         const limits = replyPartLimits(params, progress, params.attachments);
         let bodies = splitReply(params.text, limits);
         let files = params.attachments?.length ? params.attachments : undefined;
+        // The reply's card (1.32.0) and its question or buttons (1.33.0), each
+        // only to a backend that offered it now.
+        const offered = offeredExtras(params);
         const messageIds = [];
         let last;
         for (let index = 0; index < bodies.length; index += 1) {
             // The reply's files go with its last part (1.11.0).
             const named = index === bodies.length - 1 ? files : undefined;
+            const extras = frameExtras(bodies, offered, (body, candidate) => outboundFrame(params, body, undefined, undefined, true, longestAttachments(params.attachments), candidate));
             try {
                 last = {
                     outboundId: replyPartOutboundId(params.outboundId, index),
@@ -1448,6 +1733,8 @@ function createAccountTransport(accountId) {
                     body: bodies[index],
                     place: bodies.length > 1 ? { replyId: params.outboundId, part: index + 1, parts: bodies.length } : undefined,
                     ...(named ? { attachments: [...named] } : {}),
+                    ...(extras.presentation ? { presentation: extras.presentation } : {}),
+                    ...(extras.ask ? { ask: extras.ask } : {}),
                 };
                 messageIds.push(await sendOutbound({ ...last, progress, signal: params.signal, assertHandoff: params.assertHandoff }));
             }
@@ -1460,13 +1747,15 @@ function createAccountTransport(accountId) {
                     index -= 1;
                     continue;
                 }
-                if (params.attachments !== undefined && error instanceof OutboundRejectedError
-                    && error.reason === "identity_conflict") {
+                if ((params.attachments !== undefined || (hasExtras(params) && bodies.length === 1))
+                    && error instanceof OutboundRejectedError && error.reason === "identity_conflict") {
                     const saved = await reconcileOutbound(replyPartOutboundId(params.outboundId, index));
                     if (saved.status === "sent") {
                         // Core sent this reply again and a file's outcome changed since
                         // (the file is gone from the Gateway, or the backend refused it
-                        // this time): the message saved the first time stands for this part.
+                        // this time), or whether its card (1.32.0) or question (1.33.0)
+                        // was sent (the backend's offer changed): the message saved the
+                        // first time stands for this part.
                         messageIds.push(saved.messageId);
                         continue;
                     }
@@ -1644,7 +1933,7 @@ function createAccountTransport(accountId) {
         });
         // Only a status receipt settles a status query (handleOutboundControlFrame).
         if (result.status === "log_book" || result.status === "audit" || result.status === "channel_history"
-            || result.status === "session_title") {
+            || result.status === "session_title" || result.status === "agent_work" || result.status === "approval") {
             throw new Error("Backend returned an invalid outbound status receipt");
         }
         return result;
@@ -1713,6 +2002,96 @@ function createAccountTransport(accountId) {
     function folderOffered() {
         return Boolean(ws && negotiated && folderSockets.has(ws));
     }
+    // Whether this account's current connection is to a backend that offered rich-presentation (1.32.0).
+    function presentationOffered() {
+        return Boolean(ws && negotiated && presentationSockets.has(ws));
+    }
+    // Whether this account's current connection is to a backend that offered ask-user (1.33.0).
+    function askOffered() {
+        return Boolean(ws && negotiated && askSockets.has(ws));
+    }
+    // Whether this account's current connection is to a backend that offered inbound-media (1.35.0).
+    function mediaOffered() {
+        return Boolean(ws && negotiated && mediaSockets.has(ws));
+    }
+    /**
+     * A message's pictures as its turn's images (1.35.0, src/inbound-media.ts):
+     * only for a frame that names them, on a connection whose backend offered
+     * inbound-media now. Each is downloaded from this account's own backend with
+     * its connector's credential (GET /api/connector/files/{id}?event_id=...,
+     * never following a redirect) and saved in OpenClaw's media store. Without
+     * that offer, the host's media store or a pinned connector: undefined, and
+     * the agent reads the links in the message's text, as before.
+     */
+    async function framePictures(api, frame, signal) {
+        const binding = activeRuntimeBinding;
+        const saveMedia = api.runtime?.channel?.media?.saveMediaBuffer;
+        if (!frame.files?.length || !binding || !mediaOffered() || typeof saveMedia !== "function")
+            return undefined;
+        return loadInboundPictures({
+            pictures: frame.files,
+            eventId: frame.event_id,
+            signal,
+            download: (picture, pictureSignal) => fetchFile(`${httpBase(binding.backendUrl)}/api/connector/files/${encodeURIComponent(picture.id)}?${new URLSearchParams({ event_id: frame.event_id })}`, {
+                headers: { authorization: `Bearer ${binding.connectorToken}` },
+                // The connector's credential goes to its own backend only.
+                redirect: "error",
+                signal: pictureSignal,
+            }),
+            save: (buffer, contentType, maxBytes, fileName) => saveMedia(buffer, contentType, "inbound", maxBytes, fileName),
+            warn: (message) => api.logger.warn(`${log} ${message}`),
+        });
+    }
+    // A reply's card and question, each only while the backend offers it now.
+    function offeredExtras(params) {
+        return {
+            ...(params.presentation && presentationOffered() ? { presentation: params.presentation } : {}),
+            ...(params.ask && askOffered() ? { ask: params.ask } : {}),
+        };
+    }
+    // A frame for the backend on the current socket, if it is negotiated and
+    // offered ask-user; dropped otherwise (1.33.0). Never throws.
+    function sendQuestionFrame(frame) {
+        const socket = ws;
+        if (stopped || !negotiated || !socket || socket.readyState !== WebSocket.OPEN || !askSockets.has(socket))
+            return;
+        try {
+            socket.send(JSON.stringify(frame));
+        }
+        catch { /* a closing socket; the card reads its expiry anyway */ }
+    }
+    // See the module's watchQuestion.
+    function watchQuestion(questionId, messageId) {
+        try {
+            registerQuestion({
+                questionId,
+                deliveryId: `octopus-prime:${accountId}:${messageId}`,
+                finalize: (statusLine) => sendQuestionFrame(closedFrame(messageId, questionId, statusLine)),
+            });
+        }
+        catch (error) {
+            hostApi?.logger.warn(`${log} question ${questionId} is not watched: ${String(error)}`);
+        }
+    }
+    /**
+     * An answer to an agent's question (1.33.0, `question.answer`): resolved
+     * through OpenClaw's question API for an agent this connector announces,
+     * answered `question.answer.result`. Not awaited by the frame's handler, so
+     * the socket's other frames go on meanwhile; a frame it cannot read is ignored.
+     */
+    function handleQuestionAnswer(raw, isAgentAllowed) {
+        const frame = parseQuestionAnswer(raw);
+        if (!frame || !isAgentAllowed(frame.agent_id) || !hostApi)
+            return true;
+        const api = hostApi;
+        void (async () => {
+            const outcome = await resolveAnswer(frame, api.runtime.config.current(), resolveQuestion);
+            if (outcome === "failed")
+                api.logger.warn(`${log} an answer to question ${frame.question_id} did not reach it`);
+            sendQuestionFrame(answerResultFrame(frame, outcome));
+        })();
+        return true;
+    }
     // Whether this account's current connection is to a backend that offered channel history.
     function historyOffered() {
         return Boolean(ws && negotiated && historySockets.has(ws));
@@ -1764,6 +2143,49 @@ function createAccountTransport(accountId) {
         });
         if (result.status !== "session_title")
             throw new Error("Backend did not answer the session title request");
+        return result.frame;
+    }
+    // Whether this account's current connection is to a backend that offered tasks, calendar and projects.
+    function workOffered() {
+        return Boolean(ws && negotiated && workSockets.has(ws));
+    }
+    // Whether this account's current connection is to a backend that offered meetings (1.29.0).
+    function meetingsHere() {
+        return Boolean(ws && negotiated && meetingSockets.has(ws));
+    }
+    // Writes a meeting frame (a due meeting, src/meetings.ts) on the current
+    // socket, if it is open, negotiated and from a backend that offered
+    // meetings; false otherwise, so the timer tries again later.
+    function sendMeetingFrame(frame) {
+        const socket = ws;
+        if (stopped || !negotiated || !socket || socket.readyState !== WebSocket.OPEN || !meetingSockets.has(socket)) {
+            return false;
+        }
+        socket.send(JSON.stringify(frame));
+        return true;
+    }
+    /**
+     * Sends a task, calendar or project request (src/agent-work.ts, 1.28.0)
+     * with a fresh `outbound_id` and returns the backend's `work.result` as it
+     * came; a `work.rejected` throws AgentWorkRefusedError with its reason. It
+     * goes only on a socket whose backend offered `agent-work`, waits for the
+     * connector like a reply does, and is written again after a closed socket
+     * under the same `outbound_id`: the backend makes what a request makes under
+     * that request's own ID, so it is never made twice.
+     */
+    async function requestAgentWork(request, options = {}) {
+        const outboundId = randomUUID();
+        const result = await requestOutbound("work", outboundId, { ...request, outbound_id: outboundId }, {
+            signal: options.signal,
+            assertHandoff: options.assertHandoff,
+            assertSocket: (socket) => {
+                if (!workSockets.has(socket)) {
+                    throw new Error("This Octopus Prime server does not offer tasks, calendar events and projects");
+                }
+            },
+        });
+        if (result.status !== "agent_work")
+            throw new Error("Backend did not answer the request");
         return result.frame;
     }
     /**
@@ -1907,9 +2329,125 @@ function createAccountTransport(accountId) {
         }
         return true;
     }
+    /**
+     * The backend's approval frames (1.31.0, src/approvals.ts), on this
+     * account's negotiated socket whose backend offered agents' approvals:
+     * whether its owner turned them on (`approvals.config`), and the owner's
+     * decision on one this account forwarded (`approval.decide`), handed to
+     * OpenClaw's approval service and answered `approval.decide.result`.
+     */
+    function handleApprovalFrame(frame, socket, sendFrame) {
+        if (!approvalSockets.has(socket))
+            return true;
+        if (frame.type === APPROVALS_CONFIG) {
+            setApprovalsEnabled(accountId, configEnabled(frame));
+            return true;
+        }
+        void decideApproval(frame, accountId, {
+            resolve: (params) => resolveApproval({ ...params, cfg: currentAgentConfig() }),
+            isNotFound: (error) => isApprovalNotFoundError(error),
+        }).then((answer) => {
+            try {
+                sendFrame(answer);
+            }
+            catch { /* the socket closed: the backend times the decision out */ }
+            if (answer.status === "failed")
+                hostApi?.logger.warn(`${log} an approval decided in Octopus Prime could not be recorded`);
+        });
+        return true;
+    }
+    /**
+     * Forwards an approval this account handles (`approval.request`, 1.31.0) and
+     * waits for the backend's answer: true once it showed the card, false when
+     * it refused (then the approval stays on OpenClaw's other surfaces). Only on
+     * a socket whose backend offered agents' approvals; written again after a
+     * closed socket under the same request id, which the backend shows once.
+     */
+    async function requestApproval(frame) {
+        const requestId = typeof frame.request_id === "string" ? frame.request_id : "";
+        if (!requestId)
+            return false;
+        const result = await requestOutbound("approval", requestId, frame, {
+            assertSocket: (socket) => {
+                if (!approvalSockets.has(socket))
+                    throw new Error("This Octopus Prime server does not offer agents' approvals");
+            },
+        });
+        if (result.status !== "approval")
+            throw new Error("Backend did not answer the approval");
+        return result.frame.type === APPROVAL_RESULT && result.frame.status === "shown";
+    }
+    // Tells the backend an approval it showed was settled; best effort (the
+    // card turns "Expired" on its own once its time passes).
+    function notifyApproval(frame) {
+        const socket = ws;
+        if (stopped || !negotiated || !socket || socket.readyState !== WebSocket.OPEN || !approvalSockets.has(socket))
+            return;
+        try {
+            socket.send(JSON.stringify(frame));
+        }
+        catch { /* best effort */ }
+    }
+    // -- Agent Backup (1.38.0, src/backup.ts) ----------------------------------------------
+    // Whether this account's current connection is to a backend that offered Agent Backup.
+    function backupOffered() {
+        return Boolean(ws && negotiated && backupSockets.has(ws));
+    }
+    // This account's schedule (src/backup-gateway.ts), from a welcome that offered Agent Backup.
+    function startBackup() {
+        stopBackup();
+        backupScheduler = createGatewayBackup({
+            accountId,
+            connectorId: () => activeRuntimeBinding?.connectorId ?? "",
+            call: (frame) => requestBackup(frame),
+            fetch: () => fetchFile,
+            config: () => currentAgentConfig(),
+            log: {
+                info: (message) => hostApi?.logger.info?.(`${log} ${message}`),
+                warn: (message) => hostApi?.logger.warn(`${log} ${message}`),
+            },
+            ...backupDeps,
+        });
+        backupScheduler.start();
+    }
+    function stopBackup() {
+        backupScheduler?.stop();
+        backupScheduler = null;
+    }
+    /**
+     * "Back up now" from the apps (`backup.run`), on a socket whose backend
+     * offered Agent Backup: one manual backup starts unless one is running.
+     * Nothing is answered; the apps read the result in backup.status.
+     */
+    function handleBackupRun(socket) {
+        if (!backupSockets.has(socket) || !backupScheduler || ws !== socket)
+            return true;
+        if (!backupScheduler.runNow())
+            hostApi?.logger.info?.(`${log} "Back up now" arrived while a backup is running`);
+        return true;
+    }
+    /**
+     * One Agent Backup call (src/backup.ts postBackupFrame): it waits for the
+     * connector like a reply does, goes only to a backend whose welcome on the
+     * current connection offered agent-backup, and is POSTed once to
+     * /api/connector/backup with this connector's credential.
+     */
+    async function requestBackup(frame, options = {}) {
+        const readiness = await awaitOutboundReadiness(options.signal);
+        assertCurrentOutboundReadiness(readiness);
+        if (!backupSockets.has(readiness.socket))
+            throw new Error("This Octopus Prime server does not offer Agent Backup");
+        return postBackupFrame({
+            fetch: fetchFile, backendUrl: readiness.binding.backendUrl, connectorToken: readiness.binding.connectorToken,
+            frame, signal: options.signal,
+        });
+    }
     return {
+        requestBackup, backupOffered,
         start, stop, status, sendOutboundReply, sendAgentPost, uploadReplyFiles, reconcileOutboundReply, sendReaction,
         requestLogBook, requestAudit, requestFolder, folderOffered, requestChannelHistory, historyOffered,
-        requestSessionTitle, titleOffered, handleGatewayReset, pendingCount: () => pendingOutbound.size,
+        requestSessionTitle, titleOffered, presentationOffered, askOffered, watchQuestion, requestAgentWork, workOffered, handleGatewayReset, requestApproval, notifyApproval,
+        meetingsOffered: meetingsHere, meetingTimers: () => dueTimers.size,
+        pendingCount: () => pendingOutbound.size,
     };
 }

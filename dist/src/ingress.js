@@ -1,6 +1,8 @@
 import { join, resolve } from "node:path";
 import { validateIngressOrigin } from "./ingress-origin.js";
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { parseInboundPictures } from "./inbound-media.js";
+import { parseMeetingMark } from "./meetings.js";
 import { SqliteIngressQueue } from "./sqlite-ingress-queue.js";
 // The backend's ids: letters, digits, "_" and "-". Anything else is no project.
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -35,6 +37,8 @@ export function parseInboundFrame(raw) {
         throw new InvalidInboundFrameError("Inbound timestamp is invalid");
     // An optional field: one that is not a project id is left out, never a reason to refuse the message.
     const projectId = typeof frame.project_id === "string" && PROJECT_ID.test(frame.project_id) ? frame.project_id : undefined;
+    // Likewise optional, and meaningless without the project: only the exact `true` counts.
+    const noAgentToAgent = projectId !== undefined && frame.no_agent_to_agent === true;
     // Optional too: only the backend's exact `true` counts; anything else is left out.
     const twoFactor = sender.two_factor === true;
     const access = sender.command_access;
@@ -43,6 +47,8 @@ export function parseInboundFrame(raw) {
     const agentSession = frame.agent_session === true;
     const continuation = frame.session_continuation === true;
     const edited = frame.edited === true;
+    const meeting = parseMeetingMark(frame.meeting);
+    const pictures = parseInboundPictures(frame.files);
     return {
         type: "message.inbound",
         event_id: frame.event_id,
@@ -58,10 +64,13 @@ export function parseInboundFrame(raw) {
         body: frame.body,
         ...(frame.ts === undefined ? {} : { ts: frame.ts }),
         ...(projectId === undefined ? {} : { project_id: projectId }),
+        ...(noAgentToAgent ? { no_agent_to_agent: true } : {}),
         ...(audited ? { audited: true } : {}),
         ...(agentSession ? { agent_session: true } : {}),
         ...(continuation ? { session_continuation: true } : {}),
         ...(edited ? { edited: true } : {}),
+        ...(meeting ? { meeting } : {}),
+        ...(pictures ? { files: pictures } : {}),
     };
 }
 export function createOctopusIngress(options) {

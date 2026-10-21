@@ -7,7 +7,9 @@ import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
  * naming the event the turn answered: the context the session uses and its
  * context window, in tokens, and how many times OpenClaw has compacted it. The
  * backend keeps the latest report on the conversation, where the apps show a
- * context meter. Nothing else leaves the Gateway: no costs and no other usage.
+ * context meter. Nothing else goes in this frame: a turn's tokens, model and
+ * cost go, only to a backend that offered agent-usage, in their own frame
+ * (src/usage.ts, 1.30.0).
  */
 export const SESSION_STATS_FRAME = "session.stats";
 // The backend's bounds (backend/session_stats.py); beyond them a number is no measurement.

@@ -19,9 +19,12 @@
  * settings still decide everything else: a command they turn off stays off,
  * and owner-only checks of OpenClaw's own (`commands.ownerAllowFrom`) still
  * apply on top of this.
+ *
+ * `/approve` is among them since 1.31.0: answering an agent's approval is
+ * its owner's alone (src/approvals.ts), in the apps or typed.
  */
 export const OWNER_ONLY_COMMANDS = [
-    "bash", "config", "exec", "elevated", "restart", "update", "plugins", "mcp", "debug",
+    "bash", "config", "exec", "elevated", "restart", "update", "plugins", "mcp", "debug", "approve",
 ];
 /** Their other names in OpenClaw's registry; "!" at the start of a message is /bash. */
 export const OWNER_ONLY_ALIASES = {

@@ -22,7 +22,6 @@
       "octopus_tasks",
       "octopus_calendar",
       "octopus_projects",
-      "octopus_meeting",
       "octopus_backup"
     ]
   },
@@ -82,13 +81,6 @@
       "sideEffecting": true
     },
     "octopus_projects": {
-      "profiles": [
-        "coding",
-        "messaging"
-      ],
-      "sideEffecting": true
-    },
-    "octopus_meeting": {
       "profiles": [
         "coding",
         "messaging"

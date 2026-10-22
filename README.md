@@ -6,7 +6,7 @@ Octopus Prime. The plugin runs **inside** your Gateway and opens a secure
 **outbound** WSS connection to Octopus Prime. The Gateway never needs a
 public inbound port.
 
-- Package `@octopusprime/openclaw-channel-plugin`, version 1.38.4. Plugin id and
+- Package `@octopusprime/openclaw-channel-plugin`, version 1.39.4. Plugin id and
   channel id `octopus-prime`.
 - Requires OpenClaw **2026.9.8 or later** (see [Compatibility](#compatibility)).
 - Octopus Prime: https://octopusprimeai.com. App: https://app.octopusprimeai.com.
@@ -406,14 +406,17 @@ tomorrow at 10", "set up a project for the launch"). Each turn tells the agent
 so in one line, and it gets three tools:
 
 - `octopus_tasks`: create a task (title, notes, due time, assignee, this
-  conversation or its project, priority, category, reminders), list tasks
-  (this conversation's, its project's, the agent's own, or the asker's), mark
-  one done, in progress, open again or cancelled, change its due time or
-  assignee, and comment in its thread.
+  conversation or its project, priority, category, reminders, and from 1.39.0
+  how it repeats), list tasks (this conversation's, its project's, the agent's
+  own, or the asker's), mark one done, in progress, open again or cancelled,
+  change its due time or assignee (from 1.39.0 also its title, notes,
+  priority, category, reminders and repeat), and comment in its thread.
 - `octopus_calendar`: create an event (start and end, or all day, in the time
   zone given, with people and agents of the conversation invited and
-  reminders), list the events of a range, and change or cancel the events the
-  agent created.
+  reminders; from 1.39.0 also a meeting link and a repeat: daily, weekly on
+  chosen days, or monthly, every so many, until a day or so many times), list
+  the events of a range, change or cancel the events the agent created, and
+  (1.39.0) answer an invitation of the person who asked: going, maybe or no.
 - `octopus_projects`: create a project, with the person who asked and the agent
   in it and its usual starter channels, and list the projects the agent is in.
 
@@ -429,42 +432,30 @@ which agent and when. Times are read in the time zone the agent gives (an IANA
 name such as `Europe/Madrid`), so an agent that does not know a person's time
 zone should ask.
 
-## Your agent in your meetings
+## Your agents in the Project Log (1.39.0)
 
-With plugin 1.29.0 or later, and an Octopus Prime backend that offers it,
-people can send your agent to a Zoom, Google Meet or Microsoft Teams meeting
-from a link in a conversation or a calendar event ("Send Atlas to this
-meeting"). The agent joins with OpenClaw's own meeting plugins as an
-observe-only guest that reads the live captions (it never speaks and records
-no audio or video), and when the meeting should be over it posts the notes in
-that conversation: a summary, the decisions and the action items, which it
-also adds to the project's Project Log. Action items with a clear owner become
-tasks.
+In a project's channels your agents read and edit the project's Project Log
+(its shared folder) with the `octopus_folder` tool. With plugin 1.39.0 or
+later, and an Octopus Prime backend that offers it, they can also keep it
+tidy:
 
-On the Gateway:
+- Edit `CONTEXT.md` and `MILESTONES.md` like any other text file: remove an
+  outdated entry, fix a wrong one, or mark a milestone done or blocked in
+  place. `octopus_log_book` still adds new dated entries.
+- Delete a file. It is not erased: it moves to the project's **Deleted** list
+  for 30 days, where an Owner or Admin can restore it in the app (or erase it
+  sooner); after 30 days it is erased for good.
+- Rename a file or move it to another folder, and make a folder.
 
-1. Install the meeting plugins you want (they are separate OpenClaw plugins):
+An agent always changes a file from the version it read, so it never
+overwrites someone's newer change; every change is a new version people can
+see ("Edited by <agent>") and restore, and Octopus Prime records which agent
+did what. `CONTEXT.md` and `MILESTONES.md` are never deleted, renamed or
+moved. With an earlier plugin, agents keep the tools they had (add entries,
+create and edit other text files); with an earlier Octopus Prime server, a
+delete, move or new folder is refused and the agent is told so.
 
-   ```bash
-   openclaw plugins install @openclaw/zoom-meetings
-   openclaw plugins install @openclaw/google-meet
-   openclaw plugins install @openclaw/teams-meetings
-   ```
-
-2. Run each one's setup check (`openclaw zoommeetings setup`,
-   `openclaw googlemeet setup`, `openclaw teamsmeetings setup`) and fix what it
-   reports. The Gateway (or a paired node) needs Chrome with an OpenClaw
-   browser profile; Google Meet may need that profile signed in to Google.
-3. Keep meeting notes on (`transcripts.enabled`, on by default): without them
-   no notes come back.
-
-Octopus Prime → Settings › Plugin shows which meeting plugins each Gateway
-reports ("Meetings: Zoom ✅ · Google Meet ⚠️ set up"). The plugin reads that
-from OpenClaw's config (`plugins.entries`); OpenClaw's setup check is what says
-whether a join can work. A meeting's host may still have to let the agent in,
-and Zoom can ask for a passcode, a sign-in or a CAPTCHA: the agent says so in
-the conversation. Tell everyone in the meeting that an AI notetaker is joining;
-many places require their consent.
+Meetings removed (1.39.0): agents are no longer sent to Zoom, Google Meet or Microsoft Teams meetings.
 
 ## Optional: approve agent actions in Octopus Prime
 
@@ -1203,10 +1194,21 @@ in Runtime contract.
     piece of the file, `replace` what goes there; it must match once unless
     `replace_all`) or `append` (`text` added at the end, on a line of its own).
     The backend refuses an edit of a file changed since ("File changed since
-    you read it — read it again"), so nothing is overwritten.
+    you read it — read it again"), so nothing is overwritten. Since 1.39.0
+    CONTEXT.md and MILESTONES.md are read and edited this way too (up to
+    their 256 KB); `octopus_log_book` still adds entries.
+  - `delete` (`folder.delete`, 1.39.0, by `path` or `file_id`, from the
+    `version` read): the file moves to the project's Deleted list for 30 days
+    (an Owner or Admin restores it in the app), then the backend erases it.
+  - `move` (`folder.move`, 1.39.0, by `path` or `file_id`): `to` is the new
+    path; the folders must exist and the extension stays.
+  - `make_folder` (`folder.make_folder`, 1.39.0): a new folder at `path`, in a
+    folder that exists.
   Text goes up to 1 MB each way; the plugin refuses a larger write before it
-  is sent. Agents never delete, rename or make folders, and CONTEXT.md and
-  MILESTONES.md stay with `octopus_log_book`. Every change is a new version
+  is sent. CONTEXT.md and MILESTONES.md are never deleted, renamed or moved,
+  and agents never delete or move folders. A backend from before 1.39.0
+  refuses `delete`, `move` and `make_folder` as `invalid_request`, and the
+  agent is told the server may not offer them yet. Every change is a new version
   that people in the project see ("Edited by <agent>") and can restore. A call
   is a frame (`type` and the session's `channel_id` and `agent_id`, never the
   model's) POSTed once to `/api/connector/folder` with the connector's own
@@ -1352,34 +1354,18 @@ in Runtime contract.
     `no_thread`, `refused` (the app's own refusal and sentence), `rate_limited`
     (30 creates an hour per agent) and `busy`. Each reaches the agent as the
     tool's answer, in plain words, not as an error.
+  - 1.39.0 adds `repeat` (`frequency` daily, weekly, monthly or none;
+    `weekdays` for weekly; `until` a day or `count`; `every` for events only;
+    `null` on update stops it), `meeting_link` (events), `title`, `notes`,
+    `priority`, `category` and `reminders` on a task update, and the calendar
+    action `respond` (`event_id`, `response` going, maybe or no). A backend
+    with repeats answers every task and event with a `repeats` field (null
+    when it does not repeat); one without them ignores `repeat` and sends no
+    such field, and the agent is then told the repeat was not set. That
+    backend answers `respond` with `invalid_request`.
 
   With a backend that does not offer `agent-work` the tools are never offered,
   no line is added and nothing is sent: everything works as with 1.27.0.
-- **Meetings** (1.29.0, `src/meetings.ts`; `octopus_meeting` in
-  `contracts.tools` and `toolMetadata`, `sideEffecting`). The plugin asks for
-  `meetings` beside the others; only on a connection whose welcome offers it:
-  - it sends `meetings.report` on connect and at the first heartbeat after it
-    changes: `platforms` (`zoom`, `google_meet`, `teams`, each `ready`, `off`
-    or `missing`, from `plugins.entries` of `zoom-meetings`, `google-meet` and
-    `teams-meetings`, `plugins.enabled`, `plugins.allow` and `plugins.deny`)
-    and `notes` (`transcripts.enabled !== false`);
-  - a `message.inbound` frame may carry `meeting` (`meeting_id`, `phase`
-    `join` or `notes`, `platform`, `url`, `ends_at`); one that is not right is
-    left out. That turn gets a context block of type `meeting` (before the app
-    help line) telling the agent which OpenClaw tool joins it (`zoom_meetings`,
-    `google_meet`, `teams_meetings`; action `join`, mode `transcribe`), or, for
-    `notes`, to read the notes with the `transcripts` tool and post them;
-  - `octopus_meeting` (actions `status`: joined, failed or left, with a
-    `detail`; and `notes`: `summary`, `decisions`, `action_items`) is a
-    `work.request` with `tool: "meetings"`, answered and refused as above;
-  - a `join` frame arms a timer (in this process, at most 24 hours) that sends
-    `meeting.due` (`meeting_id`, `channel_id`, `agent_id`) at `ends_at`, tried
-    again every minute while there is no such socket; the backend then asks
-    the agent for the notes in the requester's name, once.
-
-  With a backend that does not offer `meetings`, nothing is reported, the tool
-  is never offered and no frame names a meeting: everything works as with
-  1.28.0.
 - **Rich replies** (1.32.0, `src/presentation.ts`): the plugin asks for
   `rich-presentation` beside the others. The outbound adapter declares
   `presentationCapabilities` (text, context, divider, tables, charts; no
@@ -1585,7 +1571,12 @@ in Runtime contract.
   whatever the close code (1006 when the connection drops, 1012 when the backend
   restarts on a redeploy). A connection attempt that cannot even be created
   is retried the same way. Each reconnect logs a warning with the close code
-  and the delay, never the URL, because the URL carries the credential.
+  and the delay, never the URL, because the URL carries the credential. The
+  backend refuses a revoked or replaced credential, a closed organization and an
+  unsupported plugin before it accepts the socket, so the upgrade is answered
+  with HTTP 403 and no close code arrives: that attempt is logged as "refused by
+  the backend (HTTP 403)", with New setup code and `openclaw plugins update
+  octopus-prime` as the way out, and is retried at the same pace.
   A socket that delivers no frame at all for 50 seconds (two heartbeat
   intervals) is dead even if it still looks open, as after a network change; a
   connection attempt that hears nothing back for 50 seconds is given up the same
@@ -1641,7 +1632,7 @@ Two version axes are independent:
   backend takes extra fields, and checks only that the v1 capabilities are
   among `capabilities`); it uses the log book only on a socket whose welcome
   offers `log-book`; likewise `project-folder` (1.14.0), `channel-history`
-  (1.15.0), `agent-work` (1.28.0), `meetings` (1.29.0) and `rich-presentation` (1.32.0) in the same field. Audited workspaces (1.7.0) add nothing to the
+  (1.15.0), `agent-work` (1.28.0) and `rich-presentation` (1.32.0) in the same field. Audited workspaces (1.7.0) add nothing to the
   negotiation, either way: the plugin learns that a workspace is audited from
   `audited: true` on a message frame, and only a turn that carried it can send
   `audit.conversations` or `audit.history`. Since 1.12.0 the negotiation

@@ -22,7 +22,6 @@ import { createChannelHistoryTool } from "./src/channel-history-tool.js";
 import { bindGatewayHost, stopAccountTransport } from "./src/gateway.js";
 import { LOG_BOOK_TOOL } from "./src/log-book.js";
 import { createLogBookTool } from "./src/log-book-tool.js";
-import { MEETING_TOOL } from "./src/meetings.js";
 import { FOLDER_TOOL } from "./src/project-folder.js";
 import { createFolderTool } from "./src/project-folder-tool.js";
 import { SESSION_TITLE_TOOL } from "./src/session-title.js";
@@ -71,9 +70,6 @@ export default defineChannelPluginEntry({
         api.registerTool((ctx) => createAgentWorkTool("tasks", ctx), { name: TASKS_TOOL });
         api.registerTool((ctx) => createAgentWorkTool("calendar", ctx), { name: CALENDAR_TOOL });
         api.registerTool((ctx) => createAgentWorkTool("projects", ctx), { name: PROJECTS_TOOL });
-        // The meeting tool (src/meetings.ts, 1.29.0), likewise, on a connection
-        // whose backend offered meetings too.
-        api.registerTool((ctx) => createAgentWorkTool("meetings", ctx), { name: MEETING_TOOL });
         // Agent Backup's tool (src/backup-tool.ts, 1.38.0): its estimate works on
         // any Gateway with a config, before any plan is bought; its status asks
         // the account's backend, on a connection that offered agent-backup.

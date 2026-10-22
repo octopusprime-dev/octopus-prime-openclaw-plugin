@@ -33,10 +33,9 @@ import { createOctopusIngress } from "./ingress.js";
 import { logBookAnswer, READ_FRAME } from "./log-book.js";
 import { MESSAGE_EDITED_FRAME, noteMessageEdited, parseMessageEdited } from "./message-edited.js";
 import { BUSY_SAMPLE_EVERY_MS, hostCommandRunner, loadProtectionOf, machineSampler, machineStatsShared, } from "./machine-stats.js";
-import { MeetingDueTimers, meetingsReport, REPORT_FRAME as MEETINGS_REPORT_FRAME } from "./meetings.js";
 import { folderBody, REJECTED_FRAME as FOLDER_REJECTED, RESULT_FRAME as FOLDER_RESULT } from "./project-folder.js";
 import { ANSWER_FRAME, answerResultFrame, closedFrame, parseQuestionAnswer, resolveAnswer, } from "./questions.js";
-import { AGENT_APPROVALS_CAPABILITY, AGENT_USAGE_CAPABILITY, AGENT_WORK_CAPABILITY, ASK_USER_CAPABILITY, assertProtocolWelcome, BACKUP_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, INBOUND_MEDIA_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, MEETINGS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, RICH_PRESENTATION_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
+import { AGENT_APPROVALS_CAPABILITY, AGENT_USAGE_CAPABILITY, AGENT_WORK_CAPABILITY, ASK_USER_CAPABILITY, assertProtocolWelcome, BACKUP_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, INBOUND_MEDIA_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, RICH_PRESENTATION_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
 import { readSessionEntry, readSessionStats, sessionStatsFrame } from "./session-stats.js";
 import { commandsReport } from "./slash-commands.js";
 import { turnUsage, usageFrame, UsageMemory } from "./usage.js";
@@ -102,6 +101,88 @@ const FILE_REFUSALS = new Set(["too_many_attachments", "invalid_attachments", "a
 // restart the backend answers the same upload with the file it kept.
 const REMEMBERED_UPLOADS = 1_000;
 class ConnectorSocketClosedError extends Error {
+}
+/**
+ * 401 or 403 when a socket client reports that the upgrade was answered with
+ * one: the backend's refusal of the credential or the plugin. Any other status
+ * (a 502 or 503 while the backend restarts) is a drop like any other.
+ */
+function upgradeRefusalStatus(error) {
+    const match = /^Unexpected server response: (401|403)$/.exec(error?.message ?? "");
+    return match ? Number(match[1]) : undefined;
+}
+/** The Gateway log's reason for that refusal (never the URL or the token). */
+function refusalReason(status) {
+    return `refused by the backend (HTTP ${status}): its saved credential is no longer accepted (the connector was `
+        + "revoked or replaced by a newer setup code, or the organization was closed) or this plugin is older than "
+        + "the backend supports. Press New setup code on this Gateway in OpenClaw agents and run setup again, or "
+        + "run openclaw plugins update octopus-prime";
+}
+// The longest agent name the backend takes in a roster (accept_connector_roster,
+// counted in characters). It refuses the whole roster for one longer name,
+// closes the socket 1002 and keeps every agent out, so an agent whose identity
+// name is a long sentence would leave the Gateway reconnecting with no agents.
+const ANNOUNCED_NAME_MAX = 256;
+// The backend answers a roster it will not take by closing the socket 1002 at
+// once (a close code carries no reason to the plugin). A 1002 inside this window
+// after the roster was sent is logged as that, with what to fix.
+const ROSTER_REFUSAL_WINDOW_MS = 10_000;
+/** The Gateway log's reason for a 1002 right after the roster (never a name, id or token). */
+function rosterRefusedReason() {
+    return "socket closed (code 1002) right after this Gateway sent its list of agents, which the backend takes whole or "
+        + "not at all: an agent's name over 256 characters or too many agents makes it refuse the list. Check this Gateway "
+        + "in the Octopus app (OpenClaw agents) for the exact reason, then fix it in OpenClaw";
+}
+// Why this Gateway closed a socket itself with 1002 (never a frame's content).
+// Not the backend refusing the list of agents: the message that was offered is
+// not acknowledged, so the backend offers it again on the next connection.
+const UNREADABLE_FRAME_REASON = "socket closed by this Gateway (code 1002) because a frame from the backend was not readable";
+const UNHANDLED_FRAME_REASON = "socket closed by this Gateway (code 1002) because it could not take a frame from the backend "
+    + "(the inbound error line above says why; a message offered with it is not acknowledged and is offered again)";
+/** An agent's name as announced: cut at the backend's limit, never mid-character. */
+function announcedName(name) {
+    const characters = Array.from(name);
+    return characters.length > ANNOUNCED_NAME_MAX ? characters.slice(0, ANNOUNCED_NAME_MAX).join("").trimEnd() : name;
+}
+/**
+ * The Gateway log's reason for a reply file left out, in plain words. It names
+ * no status, backend code, file name, path, URL or credential: core's own
+ * error for a file it could not read can carry a local path or a URL with a
+ * token, so it is never printed.
+ */
+function replyFileReason(error) {
+    if (error instanceof ReplyFileRefusedError) {
+        const { status, code } = error;
+        if (status === 0)
+            return "Octopus Prime couldn't be reached to upload it";
+        if (code === "file_type_not_allowed")
+            return "Octopus Prime doesn't take this kind of file";
+        if (code === "file_too_large" || status === 413)
+            return "it is too large for Octopus Prime";
+        if (code === "image_unreadable")
+            return "Octopus Prime couldn't read the picture";
+        if (code === "storage_full" || code === "audit_storage_full")
+            return "this organization's file storage in Octopus Prime is full";
+        if (code === "subscription_inactive")
+            return "this organization's Octopus Prime subscription is inactive";
+        if (code === "attachments_unavailable")
+            return "file attachments aren't available on this Octopus Prime server";
+        if (code === "rate_limited" || status === 429)
+            return "too many files were uploaded at once, try again shortly";
+        if (code === "upload_conflict")
+            return "another file was already uploaded for this place in the reply";
+        if (status === 401 || code === "connector_unauthorized")
+            return "Octopus Prime no longer accepts this Gateway's saved credential";
+        if (status === 404 || status === 403)
+            return "this Octopus Prime server doesn't take files from agents yet";
+        if (status >= 500)
+            return "Octopus Prime had a problem keeping it";
+        return "Octopus Prime did not accept it";
+    }
+    const message = error instanceof Error ? error.message : "";
+    if (/larger than|too large|exceeds/i.test(message))
+        return "it is larger than 5 MB";
+    return "this Gateway couldn't read it (it is gone, outside the folders the agent may send from, or couldn't be fetched)";
 }
 /** The backend's refusal of one file of a reply, with its status and code. */
 class ReplyFileRefusedError extends Error {
@@ -191,6 +272,7 @@ const POST_REFUSALS = {
     not_participant: "this agent is not in that conversation",
     ambiguous_agent: "more than one agent of this connector is in that conversation",
     agent_posting_closed: "agents do not post in that conversation",
+    session_archived: "that session was archived and is read only",
     conversation_blocked: "the person blocked this agent",
     identity_conflict: "another message was already posted under this id",
     too_many_attachments: "it named more files than a message holds",
@@ -205,6 +287,27 @@ export class PostRefusedError extends Error {
         this.reason = reason;
     }
 }
+// Refusals that no second try changes, with what the Gateway's log says of
+// each. The session was archived (by its person or by a carry-over to a new
+// session) while the agent was still answering, and an archived session takes
+// nothing from an agent (1.38.5). The reply had no text (1.39.1; the same frame
+// gets the same answer, and the person's message stays open for a real one).
+// The message it answers is no longer kept (1.39.1; the backend has ended that
+// delivery).
+const FINAL_REFUSALS = {
+    session_archived: "that session was archived and is read only (session_archived)",
+    invalid_reply: "the agent's reply had no text, so there was nothing to show. If the agent sends no other answer, the person sees that it didn't respond",
+    source_expired: "the message it answers is no longer kept in Octopus Prime",
+};
+/**
+ * The end of a send the backend refused for good: core's marker for a message
+ * the platform rejected before anything was sent, not retryable, so the queue
+ * settles it as failed and does not replay it.
+ */
+function finalRefusal(error) {
+    return new PlatformMessageNotDispatchedError(`Octopus Prime did not send the message: ${FINAL_REFUSALS[error.reason]}`, { cause: error, retryable: false });
+}
+const isFinalRefusal = (reason) => Object.prototype.hasOwnProperty.call(FINAL_REFUSALS, reason);
 // Sockets whose backend offered session-stats in its welcome.
 const sessionStatsSockets = new WeakSet();
 // Sockets whose backend offered the project log book in its welcome.
@@ -221,8 +324,6 @@ const titleSockets = new WeakSet();
 const machineSockets = new WeakSet();
 // Sockets whose backend offered tasks, calendar and projects in its welcome (1.28.0).
 const workSockets = new WeakSet();
-// Sockets whose backend offered meetings in its welcome (1.29.0).
-const meetingSockets = new WeakSet();
 // Sockets whose backend offered agent usage in its welcome (1.30.0).
 const usageSockets = new WeakSet();
 // Sockets whose backend offered agents' approvals in its welcome (1.31.0).
@@ -434,10 +535,6 @@ export function requestAgentWork(request, options = {}) {
 export function agentWorkOffered(accountId) {
     return transportFor(accountId).workOffered();
 }
-/** Whether an account's connection is to a backend that offered meetings (1.29.0). */
-export function meetingsOffered(accountId) {
-    return transportFor(accountId).meetingsOffered();
-}
 /** Forwards an approval through the connector of its account (see the account transport's requestApproval). */
 export function requestApproval(accountId, frame) {
     return transportFor(accountId).requestApproval(frame);
@@ -638,9 +735,6 @@ function createAccountTransport(accountId) {
     const readinessWaiters = new Set();
     // The turns running now, by the event id of the message each answers.
     const activeTurns = new Map();
-    // The meetings this account's agents were sent to, each asking for its
-    // notes when it should be over (1.29.0, src/meetings.ts).
-    const dueTimers = new MeetingDueTimers((frame) => sendMeetingFrame(frame));
     // The turns that ended in silence by the agent's choice (1.17.0), by the event
     // id of the message each answered: settled again if the backend offers the
     // message again, e.g. when the frame was lost with a closing socket.
@@ -685,12 +779,6 @@ function createAccountTransport(accountId) {
             origin,
             dispatch: async (frame, lifecycle) => {
                 assertCurrentIngressScope(origin, generation);
-                // A message that sends an agent to a meeting: its notes are asked
-                // for when the meeting should be over, whatever the turn does.
-                if (frame.meeting?.phase === "join" && frame.meeting.ends_at && meetingsHere()) {
-                    dueTimers.arm({ meeting_id: frame.meeting.meeting_id, channel_id: frame.channel_id,
-                        agent_id: frame.agent_id, ends_at: frame.meeting.ends_at });
-                }
                 const working = workingStatus(frame.event_id, generation);
                 const startedAt = Date.now();
                 let failed;
@@ -720,7 +808,6 @@ function createAccountTransport(accountId) {
                         // Off for this Gateway: no warning, and none counted (1.36.0).
                         machineLoad: () => (loadProtection ? machine.warnFor(frame.agent_id) : undefined),
                         agentWork: () => workOffered(),
-                        meetings: () => meetingsHere(),
                         inboundMedia: (current, signal) => framePictures(api, current, signal),
                     });
                 }
@@ -764,7 +851,6 @@ function createAccountTransport(accountId) {
         if (reconnectTimer)
             clearTimeout(reconnectTimer);
         reconnectTimer = null;
-        dueTimers.clear();
         stopBackup();
         try {
             ws?.close();
@@ -959,6 +1045,8 @@ function createAccountTransport(accountId) {
         negotiated = false;
         let announcedAgentIds = new Set();
         let announcedAgentSnapshot = "";
+        // When this socket last sent its roster: a 1002 soon after is the backend refusing it.
+        let rosterSentAt;
         // Each agent's OpenClaw commands (1.25.0, src/slash-commands.ts), reported
         // only to a backend whose welcome offered them: on connect, then whenever
         // they change (checked every COMMANDS_CHECK_HEARTBEATS heartbeats, and at
@@ -987,25 +1075,6 @@ function createAccountTransport(accountId) {
             }
             finally {
                 reportingCommands = false;
-            }
-        };
-        // This Gateway's meeting plugins (1.29.0, src/meetings.ts), reported only
-        // to a backend whose welcome offered meetings: on connect, then at the
-        // first heartbeat after they change in OpenClaw's config.
-        let reportedMeetings = "";
-        const reportMeetings = () => {
-            if (!meetingSockets.has(socket) || ws !== socket || stopped)
-                return;
-            try {
-                const report = meetingsReport(currentAgentConfig());
-                const snapshot = JSON.stringify(report);
-                if (snapshot === reportedMeetings)
-                    return;
-                sendOnSocket({ type: MEETINGS_REPORT_FRAME, ...report });
-                reportedMeetings = snapshot;
-            }
-            catch {
-                // Not this time (the socket is closing, or the config cannot be read): the next beat tries again.
             }
         };
         // Runs once per socket: on its close event, or when it is found silent.
@@ -1094,6 +1163,7 @@ function createAccountTransport(accountId) {
                     activeOrigin = origin;
                 }
                 const agents = currentAgentAnnouncement();
+                rosterSentAt = Date.now();
                 const announced = await announceAgents(sendOnSocket, agents);
                 if (ws !== socket || stopped)
                     return;
@@ -1115,8 +1185,6 @@ function createAccountTransport(accountId) {
                     machineSockets.add(socket);
                 if (welcomeOffers(welcome, AGENT_WORK_CAPABILITY))
                     workSockets.add(socket);
-                if (welcomeOffers(welcome, MEETINGS_CAPABILITY))
-                    meetingSockets.add(socket);
                 if (welcomeOffers(welcome, AGENT_USAGE_CAPABILITY))
                     usageSockets.add(socket);
                 // Agents' approvals (1.31.0, src/approvals.ts): off on every new
@@ -1159,6 +1227,7 @@ function createAccountTransport(accountId) {
                         const current = currentAgentAnnouncement();
                         const snapshot = JSON.stringify(current);
                         if (snapshot !== announcedAgentSnapshot) {
+                            rosterSentAt = Date.now();
                             sendOnSocket({ type: "agents.announce", agents: current });
                             announcedAgentIds = new Set(current.map((agent) => agent.id));
                             announcedAgentSnapshot = snapshot;
@@ -1166,7 +1235,6 @@ function createAccountTransport(accountId) {
                         }
                         if (commandHeartbeats++ % COMMANDS_CHECK_HEARTBEATS === 0)
                             void reportCommands();
-                        reportMeetings();
                         const version = hostOpenClawVersion();
                         const machine = machineSockets.has(socket) ? sharedMachineStats() : undefined;
                         sendOnSocket({
@@ -1185,7 +1253,6 @@ function createAccountTransport(accountId) {
                     commandHeartbeats = 1;
                     void reportCommands();
                 }
-                reportMeetings();
                 wakeReadinessWaiters();
             },
             onControlFrame: (frame) => (frame.type === RESET_FRAME ? handleGatewayReset(frame, sendOnSocket)
@@ -1205,6 +1272,19 @@ function createAccountTransport(accountId) {
             watchSilence();
             sendOnSocket(negotiationFrame(hostOpenClawVersion()));
         });
+        // This Gateway closes a socket it cannot use with 1002 itself (a frame it
+        // cannot read or store). The close event carries only that code, which is
+        // also what the backend answers a refused list of agents with, so the
+        // reason is kept here and the log names the real one.
+        let closedHere;
+        const closeUnusable = (closeReason, why) => {
+            if (socket.readyState === WebSocket.OPEN)
+                closedHere ??= why;
+            try {
+                socket.close(1002, closeReason);
+            }
+            catch { /* the close handler owns retry */ }
+        };
         socket.on("message", (raw) => {
             if (ws !== socket || stopped)
                 return;
@@ -1214,20 +1294,29 @@ function createAccountTransport(accountId) {
                 data = JSON.parse(raw.toString());
             }
             catch {
-                socket.close(1002, "invalid-json");
+                closeUnusable("invalid-json", UNREADABLE_FRAME_REASON);
                 return;
             }
             handleInbound(data).catch((error) => {
                 hostApi?.logger.error(`${log} inbound error: ${String(error)}`);
-                socket.close(1002, "protocol-error");
+                closeUnusable("protocol-error", UNHANDLED_FRAME_REASON);
             });
         });
         // 1006 (dropped) and 1012 (backend restarting, as on every redeploy) are the
         // usual codes; any close is followed by the same reconnect with backoff.
-        socket.on("close", (code) => releaseSocket(`socket closed (code ${code})`));
-        socket.on("error", () => {
+        // The backend refuses a revoked or replaced credential, an archived
+        // organization and an unsupported plugin before it accepts the socket: the
+        // upgrade is answered with an HTTP status and the close code (4403, 4426)
+        // never arrives, so the refusal is named from the status the client reports.
+        let refusedStatus;
+        socket.on("close", (code) => releaseSocket(refusedStatus !== undefined ? refusalReason(refusedStatus)
+            : closedHere !== undefined ? closedHere
+                : code === 1002 && rosterSentAt !== undefined && Date.now() - rosterSentAt <= ROSTER_REFUSAL_WINDOW_MS
+                    ? rosterRefusedReason() : `socket closed (code ${code})`));
+        socket.on("error", (error) => {
             if (ws !== socket)
                 return;
+            refusedStatus ??= upgradeRefusalStatus(error);
             try {
                 socket.close();
             }
@@ -1367,7 +1456,7 @@ function createAccountTransport(accountId) {
         // Keep the SDK distinction between absent and explicitly empty rosters.
         return accountAgentIds(cfg, accountId).map((id) => ({
             id,
-            name: resolveAgentIdentity(cfg, id)?.name?.trim() || id,
+            name: announcedName(resolveAgentIdentity(cfg, id)?.name?.trim() || id),
         })).sort((a, b) => a.id.localeCompare(b.id));
     }
     async function announceAgents(sendFrame, agents = currentAgentAnnouncement()) {
@@ -1660,6 +1749,11 @@ function createAccountTransport(accountId) {
                         continue;
                     }
                 }
+                if (index === 0 && error instanceof PostRefusedError && isFinalRefusal(error.reason)) {
+                    const ended = finalRefusal(error);
+                    hostApi?.logger.warn(`${log} ${ended.message}`);
+                    throw ended;
+                }
                 if (index === 0)
                     throw error;
                 // Earlier parts were posted: the SDK's not-dispatched marker must not reach core.
@@ -1760,6 +1854,12 @@ function createAccountTransport(accountId) {
                         continue;
                     }
                 }
+                if (index === 0 && error instanceof OutboundRejectedError && isFinalRefusal(error.reason)) {
+                    // Core settles the reply as failed and does not replay it; logged once, here.
+                    const ended = finalRefusal(error);
+                    hostApi?.logger.warn(`${log} ${ended.message}`);
+                    throw ended;
+                }
                 if (index === 0) {
                     const saved = bodies.length > 1 && error instanceof OutboundRejectedError && error.reason === "identity_conflict"
                         ? await continueWholeSave(params, limits)
@@ -1836,10 +1936,11 @@ function createAccountTransport(accountId) {
             }
             catch (error) {
                 failed += 1;
-                const reason = error instanceof Error ? error.message : String(error);
+                const reason = replyFileReason(error);
                 if (error instanceof ReplyFileRefusedError && error.stopsReply)
                     stop = reason;
-                hostApi?.logger.warn(`${log} file ${index + 1} of ${params.mediaUrls.length} of a reply couldn't be delivered: ${reason}`);
+                hostApi?.logger.warn(`${log} file ${index + 1} of ${params.mediaUrls.length} of a reply couldn't be delivered: ${reason}. `
+                    + `The reply is sent without it, and says so.`);
             }
         }
         return { fileIds, failed };
@@ -2149,21 +2250,6 @@ function createAccountTransport(accountId) {
     function workOffered() {
         return Boolean(ws && negotiated && workSockets.has(ws));
     }
-    // Whether this account's current connection is to a backend that offered meetings (1.29.0).
-    function meetingsHere() {
-        return Boolean(ws && negotiated && meetingSockets.has(ws));
-    }
-    // Writes a meeting frame (a due meeting, src/meetings.ts) on the current
-    // socket, if it is open, negotiated and from a backend that offered
-    // meetings; false otherwise, so the timer tries again later.
-    function sendMeetingFrame(frame) {
-        const socket = ws;
-        if (stopped || !negotiated || !socket || socket.readyState !== WebSocket.OPEN || !meetingSockets.has(socket)) {
-            return false;
-        }
-        socket.send(JSON.stringify(frame));
-        return true;
-    }
     /**
      * Sends a task, calendar or project request (src/agent-work.ts, 1.28.0)
      * with a fresh `outbound_id` and returns the backend's `work.result` as it
@@ -2447,7 +2533,6 @@ function createAccountTransport(accountId) {
         start, stop, status, sendOutboundReply, sendAgentPost, uploadReplyFiles, reconcileOutboundReply, sendReaction,
         requestLogBook, requestAudit, requestFolder, folderOffered, requestChannelHistory, historyOffered,
         requestSessionTitle, titleOffered, presentationOffered, askOffered, watchQuestion, requestAgentWork, workOffered, handleGatewayReset, requestApproval, notifyApproval,
-        meetingsOffered: meetingsHere, meetingTimers: () => dueTimers.size,
         pendingCount: () => pendingOutbound.size,
     };
 }

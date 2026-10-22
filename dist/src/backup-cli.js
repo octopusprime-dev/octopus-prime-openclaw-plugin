@@ -7,7 +7,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { accountSection, listConnectorAccountIds, normalizeAccountId } from "./accounts.js";
 import { BackupRefusedError, getObject, KEYS_FRAME, postBackupFrame, putObject, refusalMessage, SETUP_FRAME, sizeText, STATUS_FRAME, statusOf, } from "./backup.js";
 import { BackupKeyError, buildEnvelope, checkedEnvelope, confirmsLastGroup, formatRecoveryKey, newDataKey, newRecoveryKey, openEnvelopeWithTyped, passphraseProblem, rewrapEnvelope, } from "./backup-crypto.js";
-import { estimateBackup, estimateText, listMachines, listPoints, restoreBackup, RestoreConflictError, runBackup, } from "./backup-engine.js";
+import { estimateBackup, estimateText, findPoint, listMachines, listPointsPage, restoreBackup, RestoreConflictError, runBackup, } from "./backup-engine.js";
 import { computerKeystore, keystoreHolds, placeFromConfig } from "./backup-gateway.js";
 import { resolvePinnedRuntimeConfig } from "./runtime-config.js";
 export const BACKUP_COMMANDS = ["setup", "status", "now", "estimate", "restore", "passphrase"];
@@ -211,17 +211,40 @@ async function restoreCommand(env, acct, options) {
         })();
     if (!machine)
         throw new CliStop("That Gateway has no backups you can restore.");
-    const points = await listPoints(acct.call, machine.connector_id);
-    if (points.length === 0)
+    const newest = await listPointsPage(acct.call, machine.connector_id);
+    if (newest.points.length === 0)
         throw new CliStop(`${machine.name} has no restore points.`);
-    const point = options.point
-        ? points.find((candidate) => candidate.snapshot_id === options.point)
-        : await (async () => {
-            io.print(`Restore points of ${machine.name}, newest first:`);
-            return choose(io, points, (p) => `${p.made_at ?? "?"} — ${p.files.toLocaleString("en-US")} files, ${sizeText(p.bytes)} (${p.kind})`, "Number (Enter for the newest): ");
-        })();
-    if (!point)
+    // --point reaches any point, however old: older pages are read until its id is on one.
+    let point = options.point
+        ? await findPoint(acct.call, machine.connector_id, options.point, newest) : undefined;
+    if (options.point && !point)
         throw new CliStop("That restore point wasn't found.");
+    if (!point) {
+        let page = newest;
+        if (options.before) {
+            const anchor = await findPoint(acct.call, machine.connector_id, options.before, newest);
+            if (!anchor)
+                throw new CliStop("That restore point wasn't found.");
+            page = await listPointsPage(acct.call, machine.connector_id, anchor);
+            if (page.points.length === 0)
+                throw new CliStop(`${machine.name} has no restore points older than that one.`);
+        }
+        const label = (p) => `${p.made_at ?? "?"} — ${p.files.toLocaleString("en-US")} files, ${sizeText(p.bytes)} (${p.kind})`;
+        const older = page.more
+            ? [`Older restore points are kept: add --before ${page.points[page.points.length - 1].snapshot_id} to see the next ${page.points.length}.`] : [];
+        io.print(`Restore points of ${machine.name}${options.before ? " older than that one" : ""}, newest first:`);
+        if (options.list) {
+            for (const p of page.points)
+                io.print(`  ${p.snapshot_id}  ${label(p)}`);
+            for (const line of older)
+                io.print(line);
+            io.print("Restore one with --point <id>.");
+            return 0;
+        }
+        for (const line of older)
+            io.print(line);
+        point = await choose(io, page.points, label, "Number (Enter for the newest): ");
+    }
     const place = env.place();
     const store = options.keepKeys ? env.keystore() : null;
     if (options.keepKeys && !store)
@@ -403,7 +426,9 @@ export function registerOctopusCli(program, makeEnv) {
                 .option("--overwrite", "replace files that are already on this computer")
                 .option("--keep-keys", "keep the same keys for this computer's own backups")
                 .option("--machine <connector_id>", "the Gateway whose backup to restore")
-                .option("--point <snapshot_id>", "the restore point");
+                .option("--point <snapshot_id>", "the restore point (any one kept, however old)")
+                .option("--list", "list the restore points with their ids; restore nothing")
+                .option("--before <snapshot_id>", "the restore points older than this one");
         }
         command.action(async (...args) => {
             const options = (args[0] && typeof args[0] === "object" ? args[0] : {});

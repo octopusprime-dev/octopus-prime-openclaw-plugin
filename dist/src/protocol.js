@@ -89,15 +89,6 @@ export const MACHINE_STATS_CAPABILITY = "machine-stats";
  */
 export const AGENT_WORK_CAPABILITY = "agent-work";
 /**
- * Optional, both ways (1.29.0): the plugin asks for it the same way, so a
- * backend says which meeting a message sends its agent to (`meeting`) only to
- * a plugin that asked; and only on a connection whose backend offered it in
- * its welcome does the plugin report this Gateway's meeting plugins, offer
- * agents the `octopus_meeting` tool and ask for the notes when a meeting is
- * over (src/meetings.ts).
- */
-export const MEETINGS_CAPABILITY = "meetings";
-/**
  * Optional, one way (1.30.0): a backend that keeps what each agent's turns
  * cost offers it in its welcome, and only such a backend is sent each turn's
  * tokens, model and cost (`agent.usage`, src/usage.ts). An older backend is
@@ -148,7 +139,7 @@ export const BACKUP_CAPABILITY = "agent-backup";
 export const OPTIONAL_CAPABILITIES = [
     LOG_BOOK_CAPABILITY, PROJECT_FOLDER_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, TURN_SILENCE_CAPABILITY,
     SESSION_TITLE_CAPABILITY, GATEWAY_RESET_CAPABILITY, SLASH_COMMANDS_CAPABILITY, MESSAGE_EDITED_CAPABILITY,
-    AGENT_WORK_CAPABILITY, MEETINGS_CAPABILITY, RICH_PRESENTATION_CAPABILITY, ASK_USER_CAPABILITY,
+    AGENT_WORK_CAPABILITY, RICH_PRESENTATION_CAPABILITY, ASK_USER_CAPABILITY,
     INBOUND_MEDIA_CAPABILITY, BACKUP_CAPABILITY,
 ];
 /**
@@ -156,7 +147,7 @@ export const OPTIONAL_CAPABILITIES = [
  * 1.12.0, in each negotiation, so the backend can tell an Owner when the
  * plugin on a Gateway is too old.
  */
-export const PLUGIN_VERSION = "1.38.4";
+export const PLUGIN_VERSION = "1.39.4";
 /**
  * The v1 negotiation, plus the plugin's version and, when the host gives one,
  * the running OpenClaw version (the transport's checked `api.runtime.version`).

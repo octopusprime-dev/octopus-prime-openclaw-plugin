@@ -3,7 +3,6 @@ import { buildChannelInboundEventContext, } from "openclaw/plugin-sdk/channel-in
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { accountAgentIds, accountEnabled, accountSection, DEFAULT_ACCOUNT_ID, normalizeAccountId, withAccountConfig, } from "./accounts.js";
 import { AGENT_WORK_INSTRUCTION } from "./agent-work.js";
-import { meetingInstruction } from "./meetings.js";
 import { AUDIT_NOTICE, forgetAuditedSession, rememberAuditedSession } from "./audited-workspace.js";
 import { rememberConversationSession } from "./channel-history.js";
 import { withMissingPicturesNote } from "./inbound-media.js";
@@ -176,24 +175,6 @@ export function agentWork(offered) {
     };
 }
 /**
- * What the turn of a message that sends its agent to a meeting, or asks it
- * for that meeting's notes, tells the agent (1.29.0, src/meetings.ts): which
- * tool joins it, in which mode, and how to report and post the notes. Only
- * for a frame that names the meeting (`meeting`), on a connection whose
- * backend offered meetings; like the entries above, a context block of its
- * own: nothing typed into a message adds it.
- */
-export function meetingTurn(frame, offered) {
-    if (!offered || !frame.meeting)
-        return undefined;
-    return {
-        label: "Octopus Prime meeting",
-        source: CHANNEL,
-        type: "meeting",
-        payload: { instruction: meetingInstruction(frame.meeting) },
-    };
-}
-/**
  * Where agents read how the app works (1.19.0):
  * the AI reference on the website, which is kept current. People are
  * told to ask their agent to teach them Octopus Prime, so every turn in every
@@ -311,13 +292,12 @@ export async function dispatchOctopusInbound(options) {
         // project log's instruction (1.13.0), a fresh session's first message
         // (1.24.0), a message edited to mention the agent (1.26.0), the computer
         // under heavy load (1.27.0), the tools for tasks, calendar and projects
-        // where the backend offers them (1.28.0), a meeting the message sends the
-        // agent to or asks the notes of (1.29.0); and, on every turn, last, where
+        // where the backend offers them (1.28.0); and, on every turn, last, where
         // to read how the app works (1.19.0).
         const structuredContext = [
             senderProtection(frame), workspaceAudit(frame), projectLog(frame), sessionContinuation(frame),
             messageEdited(frame), machineLoad(options.machineLoad?.()), agentWork(options.agentWork?.() === true),
-            meetingTurn(frame, options.meetings?.() === true), appHelp(),
+            appHelp(),
         ].filter((entry) => entry !== undefined);
         const ctxPayload = buildChannelInboundEventContext({
             channel: CHANNEL,

@@ -128,9 +128,10 @@ export const LOG_BOOK_TOOL_DESCRIPTION = [
     "Read or add to this Octopus Prime project's log book. The Project Log keeps CONTEXT.md, a running summary",
     "and log that carries the project's context from one session to the next, and MILESTONES.md, its milestones and",
     "progress. action \"read\" returns a file (a long one comes shortened, with a note where text is left out).",
-    "action \"add_entry\" adds an entry at the end of a file, dated and signed with your name. You cannot change or",
-    "delete earlier text; people in the project edit the files. Add an entry when you finish a step, take or learn a",
-    "decision, or leave an open question that a later session should know.",
+    "action \"add_entry\" adds an entry at the end of a file, dated and signed with your name. To fix or remove earlier",
+    "text (an outdated or wrong entry, a milestone now done or blocked), edit the file in place with octopus_folder,",
+    "from the version you read there; every change is kept as a version people can restore. Add an entry when you",
+    "finish a step, take or learn a decision, or leave an open question that a later session should know.",
 ].join(" ");
 export const LOG_BOOK_PARAMETERS = {
     type: "object",

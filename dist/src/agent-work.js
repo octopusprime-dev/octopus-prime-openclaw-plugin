@@ -16,12 +16,38 @@ const ZONE = "The IANA time zone the times are in (for example America/New_York,
     + "wall time or a day; ask the person if you don't know theirs.";
 const REMINDERS = { type: "array", items: { type: "integer", minimum: 1 }, maxItems: 5,
     description: "Reminders, in whole minutes before it (for example [10, 60])." };
+// How a task or an event repeats (1.39.0); the first time is the task's due time or the event's start.
+const REPEAT_PROPERTIES = {
+    frequency: { type: "string", enum: ["daily", "weekly", "monthly", "none"],
+        description: "How often it repeats; none for no repeat." },
+    weekdays: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 7,
+        description: "weekly only: the days of the week it happens on, by name (monday or mon). The first time's day "
+            + "is always one of them (for a task, it must be)." },
+    until: { type: "string", description: "The last day it may happen on, YYYY-MM-DD. Not with count." },
+    count: { type: "integer", minimum: 1, maximum: 1000, description: "How many times it happens in all. Not with until." },
+};
+const TASK_REPEAT = {
+    type: ["object", "null"], properties: REPEAT_PROPERTIES, required: ["frequency"], additionalProperties: false,
+    description: "create, update: how the task repeats from its due time (it needs a due time and timezone). For "
+        + "update it is for this task and all future ones; null stops it.",
+};
+const EVENT_REPEAT = {
+    type: ["object", "null"],
+    properties: {
+        ...REPEAT_PROPERTIES,
+        every: { type: "integer", minimum: 1, maximum: 99, description: "Every so many days, weeks or months (1 by default)." },
+    },
+    required: ["frequency"], additionalProperties: false,
+    description: "create, update: how the event repeats from its start, for example {\"frequency\": \"weekly\", "
+        + "\"weekdays\": [\"tue\", \"thu\"], \"until\": \"2026-12-31\"}. For update, null stops it.",
+};
 export const TASKS_TOOL_DESCRIPTION = [
     "Create and manage tasks in Octopus Prime when someone asks.",
     "create: a task for the person who asked (or someone else in this conversation, or yourself), in this",
-    "conversation or its project, with an optional due time; it shows as created by you.",
+    "conversation or its project, with an optional due time, and repeating if asked; it shows as created by you.",
     "list: tasks of this conversation, of its project, given to you, or given to the person who asked.",
-    "update: mark a task done, in progress, open again or cancelled, change its due time or its assignee.",
+    "update: mark a task done, in progress, open again or cancelled, change its due time, assignee, title, notes,",
+    "priority, category, reminders or how it repeats.",
     "comment: add a comment in the task's thread when its thread is in this conversation.",
     "You act with the permissions of the person who asked you; tasks are never deleted, only cancelled.",
 ].join(" ");
@@ -30,16 +56,19 @@ export const TASKS_PARAMETERS = {
     properties: {
         action: { type: "string", enum: ["create", "list", "update", "comment"],
             description: "create a task, list tasks, update one, or comment on one." },
-        title: { type: "string", description: "create: the task's title (up to 200 characters)." },
-        notes: { type: "string", description: "create: more about the task." },
+        title: { type: "string", description: "create, update: the task's title (up to 200 characters)." },
+        notes: { type: ["string", "null"], description: "create, update: more about the task. For update, null takes "
+                + "the notes away." },
         due: { type: "string", description: "create, update: when it is due: YYYY-MM-DDTHH:MM in timezone, a day "
                 + "YYYY-MM-DD (due at its end), or an instant with its UTC offset. For update, null takes the due time away." },
         timezone: { type: "string", description: ZONE },
         assignee: { type: "string", description: `create, update: who does it. ${WHO} For create, "me" when left out.` },
         place: { type: "string", enum: ["conversation", "project"], description: `create: where it belongs. ${PLACE}` },
-        priority: { type: "string", enum: ["low", "normal", "high"], description: "create: its priority." },
-        category: { type: "string", description: "create: one of the organization's task categories, by name." },
-        reminders: { ...REMINDERS, description: "create: reminders, in whole minutes before it is due." },
+        priority: { type: "string", enum: ["low", "normal", "high"], description: "create, update: its priority." },
+        category: { type: ["string", "null"], description: "create, update: one of the organization's task "
+                + "categories, by name. For update, null takes it away." },
+        reminders: { ...REMINDERS, description: "create, update: reminders, in whole minutes before it is due." },
+        repeat: TASK_REPEAT,
         scope: { type: "string", enum: ["conversation", "project", "agent", "person"],
             description: "list: this conversation's tasks (default), its project's, those given to you, or those given "
                 + "to the person who asked." },
@@ -57,15 +86,18 @@ export const CALENDAR_TOOL_DESCRIPTION = [
     "Create and manage calendar events in Octopus Prime when someone asks.",
     "create: an event organized by the person who asked, in this conversation or its project, with people and",
     "agents of this conversation invited; it shows as created by you.",
+    "It may repeat (daily, weekly on some days, monthly; every so many; until a day or so many times).",
     "list: the events in a range (days or instants) of this conversation, of its project, or of the person who asked.",
     "update or cancel: only events you created. Events are never deleted, only cancelled.",
+    "respond: answer an event the person who asked is invited to (going, maybe or no), for them.",
     "You act with the permissions of the person who asked you.",
 ].join(" ");
 export const CALENDAR_PARAMETERS = {
     type: "object",
     properties: {
-        action: { type: "string", enum: ["create", "list", "update", "cancel"],
-            description: "create an event, list events, update or cancel one you created." },
+        action: { type: "string", enum: ["create", "list", "update", "cancel", "respond"],
+            description: "create an event, list events, update or cancel one you created, or respond to one for the "
+                + "person who asked." },
         title: { type: "string", description: "create, update: the event's title." },
         start: { type: "string", description: "create, update: when it starts, YYYY-MM-DDTHH:MM in timezone (a day "
                 + "YYYY-MM-DD when all_day). list: the first day (YYYY-MM-DD) or an instant with its UTC offset." },
@@ -75,13 +107,18 @@ export const CALENDAR_PARAMETERS = {
         timezone: { type: "string", description: ZONE },
         description: { type: "string", description: "create, update: what it is about." },
         location: { type: "string", description: "create, update: where it is." },
+        meeting_link: { type: ["string", "null"], description: "create, update: a web address to join it (https://...). "
+                + "For update, null takes it away." },
         attendees: { type: "array", items: { type: "string" }, maxItems: 20,
             description: `create, update: who is invited. ${WHO} The person who asked organizes it.` },
         reminders: REMINDERS,
+        repeat: EVENT_REPEAT,
         place: { type: "string", enum: ["conversation", "project"], description: `create: where it belongs. ${PLACE}` },
         scope: { type: "string", enum: ["conversation", "project", "person"],
             description: "list: this conversation's events (default), its project's, or the person who asked's." },
-        event_id: { type: "string", description: "update, cancel: the event's ID (cev_...)." },
+        event_id: { type: "string", description: "update, cancel, respond: the event's ID (cev_...)." },
+        response: { type: "string", enum: ["going", "maybe", "no"],
+            description: "respond: the answer of the person who asked." },
     },
     required: ["action"],
     additionalProperties: false,
@@ -103,18 +140,16 @@ export const PROJECTS_PARAMETERS = {
 };
 // The arguments each tool passes on; anything else the model writes is dropped.
 const ARGUMENTS = {
-    tasks: ["title", "notes", "due", "timezone", "assignee", "place", "priority", "category", "reminders", "scope",
-        "status", "limit", "task_id", "text"],
-    calendar: ["title", "start", "end", "all_day", "timezone", "description", "location", "attendees", "reminders",
-        "place", "scope", "event_id"],
+    tasks: ["title", "notes", "due", "timezone", "assignee", "place", "priority", "category", "reminders", "repeat",
+        "scope", "status", "limit", "task_id", "text"],
+    calendar: ["title", "start", "end", "all_day", "timezone", "description", "location", "meeting_link", "attendees",
+        "reminders", "repeat", "place", "scope", "event_id", "response"],
     projects: ["name", "description"],
-    meetings: ["meeting_id", "state", "detail", "summary", "decisions", "action_items"],
 };
 const ACTIONS = {
     tasks: ["create", "list", "update", "comment"],
-    calendar: ["create", "list", "update", "cancel"],
+    calendar: ["create", "list", "update", "cancel", "respond"],
     projects: ["create", "list"],
-    meetings: ["status", "notes"],
 };
 /**
  * The frame a tool call sends, or the reason it is refused before anything is
@@ -190,6 +225,8 @@ function taskLine(task) {
         parts.push(`${oneLine(task.priority)} priority`);
     if (task.category)
         parts.push(`category ${quoted(task.category)}`);
+    if (task.repeats)
+        parts.push(`repeats ${oneLine(task.repeats)}`);
     const made = isRecord(task.created_by_agent) ? task.created_by_agent : undefined;
     if (made?.name)
         parts.push(`created by ${oneLine(made.name)}`);
@@ -201,8 +238,12 @@ function eventLine(event) {
         : `${oneLine(event.start_local)} to ${oneLine(event.end_local)} ${oneLine(event.timezone)} (${utc(event.start)} `
             + `to ${utc(event.end)})`;
     const parts = [`${quoted(event.title)} (ID ${oneLine(event.event_id)})`, when];
+    if (event.repeats)
+        parts.push(`repeats ${oneLine(event.repeats)}`);
     if (event.location)
         parts.push(`at ${quoted(event.location)}`);
+    if (event.meeting_link)
+        parts.push(`link ${quoted(event.meeting_link)}`);
     const people = Array.isArray(event.people) ? event.people.filter(isRecord) : [];
     if (people.length)
         parts.push(`people: ${people.map((p) => `${oneLine(p.name) || "Member"} (${oneLine(p.response)})`).join(", ")}`);
@@ -219,6 +260,15 @@ function projectLine(project) {
     return `${quoted(project.name)} (ID ${oneLine(project.project_id)})${channels ? `, channels ${channels}` : ""}`;
 }
 const UNREADABLE = "Backend sent an answer to the request that could not be read";
+// A repeat the agent asked for that the answer does not show: a backend
+// without repeats does not read `repeat`, and its answer has no `repeats`
+// field at all.
+const NOT_SET = " Octopus Prime did not set the repeat: this server does not offer repeats yet. Tell the person.";
+function notSet(request, item) {
+    const asked = request.args.repeat;
+    const wanted = isRecord(asked) && asked.frequency !== "none";
+    return wanted && !Object.hasOwn(item, "repeats") ? NOT_SET : "";
+}
 /** What the agent gets back from the backend's answer to its call. */
 export function workToolResult(request, frame) {
     const { tool, action } = request;
@@ -242,7 +292,8 @@ export function workToolResult(request, frame) {
         else {
             if (!isRecord(frame.task))
                 throw new Error(UNREADABLE);
-            text = `${action === "create" ? "Created task" : "Updated task"} ${taskLine(frame.task)}; ${where(request, frame.task)}.`;
+            text = `${action === "create" ? "Created task" : "Updated task"} ${taskLine(frame.task)}; ${where(request, frame.task)}.`
+                + notSet(request, frame.task);
         }
     }
     else if (tool === "calendar") {
@@ -260,22 +311,13 @@ export function workToolResult(request, frame) {
         else {
             if (!isRecord(frame.event))
                 throw new Error(UNREADABLE);
-            const done = { create: "Created event", update: "Updated event", cancel: "Cancelled event" }[action] ?? "Event";
-            text = `${done} ${eventLine(frame.event)}; ${where(request, frame.event)}.`;
-        }
-    }
-    else if (tool === "meetings") {
-        if (typeof frame.meeting_id !== "string")
-            throw new Error(UNREADABLE);
-        if (action === "status") {
-            text = `Octopus Prime shows meeting ${oneLine(frame.meeting_id)} as ${oneLine(frame.status)}.`;
-            if (frame.status === "joined")
-                text += " You will be asked for the notes here when it should be over.";
-        }
-        else {
-            const logged = frame.project_log === "added" ? " and added them to the Project Log"
-                : frame.project_log === "no_project" ? "" : ` (the Project Log was not changed: ${oneLine(frame.project_log)})`;
-            text = `Posted the notes in this conversation${logged}.`;
+            if (action === "respond") {
+                text = `Answered ${quoted(frame.response)} for the person who asked to event ${eventLine(frame.event)}.`;
+            }
+            else {
+                const done = { create: "Created event", update: "Updated event", cancel: "Cancelled event" }[action] ?? "Event";
+                text = `${done} ${eventLine(frame.event)}; ${where(request, frame.event)}.` + notSet(request, frame.event);
+            }
         }
     }
     else if (action === "list") {

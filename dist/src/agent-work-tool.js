@@ -1,13 +1,11 @@
 import { CALENDAR_PARAMETERS, CALENDAR_TOOL, CALENDAR_TOOL_DESCRIPTION, PROJECTS_PARAMETERS, PROJECTS_TOOL, PROJECTS_TOOL_DESCRIPTION, refusedToolResult, TASKS_PARAMETERS, TASKS_TOOL, TASKS_TOOL_DESCRIPTION, workRequest, workToolResult, } from "./agent-work.js";
 import { conversationSessionFor } from "./channel-history.js";
-import { MEETING_PARAMETERS, MEETING_TOOL, MEETING_TOOL_DESCRIPTION } from "./meetings.js";
-import { AgentWorkRefusedError, agentWorkOffered, meetingsOffered, requestAgentWork } from "./transport.js";
+import { AgentWorkRefusedError, agentWorkOffered, requestAgentWork } from "./transport.js";
 const agentKey = (id) => id.trim().toLowerCase();
 const TOOLS = {
     tasks: { name: TASKS_TOOL, label: "Tasks", description: TASKS_TOOL_DESCRIPTION, parameters: TASKS_PARAMETERS },
     calendar: { name: CALENDAR_TOOL, label: "Calendar", description: CALENDAR_TOOL_DESCRIPTION, parameters: CALENDAR_PARAMETERS },
     projects: { name: PROJECTS_TOOL, label: "Projects", description: PROJECTS_TOOL_DESCRIPTION, parameters: PROJECTS_PARAMETERS },
-    meetings: { name: MEETING_TOOL, label: "Meeting", description: MEETING_TOOL_DESCRIPTION, parameters: MEETING_PARAMETERS },
 };
 /**
  * One of the agent tools `octopus_tasks`, `octopus_calendar` and
@@ -20,16 +18,12 @@ const TOOLS = {
  * the agent and the delivery from the session, never from the model's
  * arguments. The backend acts as the person who asked, only where the agent
  * is; its refusal comes back as a plain answer the agent passes on.
- * `octopus_meeting` (1.29.0) goes the same way, offered only where the
- * backend offered meetings too.
  */
 export function createAgentWorkTool(tool, ctx) {
     const session = conversationSessionFor(ctx.sessionKey);
     if (!session || (typeof ctx.agentId === "string" && agentKey(ctx.agentId) !== agentKey(session.agentId)))
         return null;
     if (!agentWorkOffered(session.accountId))
-        return null;
-    if (tool === "meetings" && !meetingsOffered(session.accountId))
         return null;
     const { name, label, description, parameters } = TOOLS[tool];
     return {

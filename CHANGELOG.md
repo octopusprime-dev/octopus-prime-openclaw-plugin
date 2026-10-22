@@ -6,6 +6,161 @@ entry says what changed, which Octopus Prime backend it needs and whether it
 goes live only after a Gateway restart. The sections it names are in
 [README.md](README.md).
 
+## 1.39.4
+
+First chat: when this Gateway closes its own connection because it could not
+take a frame from the backend (for example it could not store a message that
+was offered, or a frame was not readable), the Gateway's log now says so. It
+used to print "socket closed (code 1002) right after this Gateway sent its list
+of agents, which the backend takes whole or not at all", the line for a refused
+list of agents, whenever that close came within ten seconds of the list, so an
+Owner whose messages were not getting through was sent to check the agents'
+names. Now the line reads "socket closed by this Gateway (code 1002) because it
+could not take a frame from the backend", points to the "inbound error" line
+above it, and says a message offered with it is not acknowledged and is offered
+again. A close the backend itself makes with 1002 right after the list is still
+logged as a refused list. Nothing else changes: no message is acknowledged
+that was not stored, none is dropped, and the reconnect and the backend's
+offering again are as before. It works with any Octopus Prime backend. Goes
+live after a Gateway restart.
+
+## 1.39.3
+
+Zoom, Google Meet and Microsoft Teams meeting support was removed. Agents are
+no longer sent to meetings: the `octopus_meeting` tool, the `meetings` optional
+capability, the `meetings.report` and `meeting.due` frames and the `meeting`
+context block are gone. Nothing changes for chat. With a backend that still
+offers `meetings`, nothing is reported or offered, and a message that still
+names a meeting reaches the agent as a plain message. There is nothing to
+uninstall; OpenClaw's own meeting plugins are not touched. The removal was
+merged without a version number of its own; this entry gives it one. It works
+with any Octopus Prime backend. Goes live after a Gateway restart.
+
+## 1.39.2
+
+First chat: when a file of an agent's reply is left out, the Gateway's log says
+why in plain words. The reply itself was already right: it still goes, without
+the file, and says how many files couldn't be delivered. But the log line
+printed the backend's status and code (for example `the backend refused it
+(400 file_type_not_allowed)`), and for a file the Gateway could not read it
+printed OpenClaw's own error, which can hold a local path or a link with a
+token in it. Now it is one sentence by cause, for example "file 1 of 2 of a
+reply couldn't be delivered: Octopus Prime doesn't take this kind of file. The
+reply is sent without it, and says so." The causes named: a kind of file not
+taken, too large, file attachments not available on the server, the
+organization's storage full or its subscription inactive, too many uploads at
+once, a picture that couldn't be read, a saved credential no longer accepted,
+an older server that takes no files from agents, a server problem, the server
+not reachable, and a file this Gateway couldn't read. The line carries no
+status, code, file name, path, link or file content. Nothing else changes: the
+upload, the one reply and its retry after a dropped connection are as before.
+Works with any Octopus Prime backend. Goes live after a Gateway restart.
+
+## 1.39.1
+
+First chat: two more replies the backend refuses for good are settled once, in
+plain words, instead of being sent again. Since the backend began refusing a
+reply with no text (it used to save an empty message as the agent's answer), a
+reply of `""` or only spaces, with no file, card or question, came back
+`invalid_reply`; and a reply to a message that is no longer kept (past the
+organization's retention time) comes back `source_expired`. The plugin treated
+both as an ordinary failure, so OpenClaw sent the same reply again up to five
+times and the Gateway's log showed `Backend rejected outbound intent:
+invalid_reply` (or `source_expired`). Now it writes the reply once, logs one
+sentence and tells OpenClaw not to send it again: "the agent's reply had no
+text, so there was nothing to show. If the agent sends no other answer, the
+person sees that it didn't respond", or "the message it answers is no longer
+kept in Octopus Prime". The sentence carries no backend code, message text or
+token. Only a reply refused at its first part is settled this way; a refusal at
+a later part of a long reply, and every other reason, behave as before. The
+archived-session refusal (1.38.5) is unchanged. A backend that does not send
+these reasons is answered as before. Goes live after a Gateway restart.
+## 1.39.0
+
+Agents change and delete inside the Project Log. The `octopus_folder` tool now
+edits `CONTEXT.md` and `MILESTONES.md` like any other text file (remove an
+outdated entry, fix a wrong one, mark a milestone done or blocked in place),
+always from the version the agent read, up to the log book's 256 KB;
+`octopus_log_book`'s `add_entry` works as before, and its description now
+points to `octopus_folder` for changing earlier text. Three new actions:
+`delete` (a file, from the version read: it moves to the project's Deleted
+list, where an Owner or Admin can restore it for 30 days before it is erased),
+`move` (rename a file or put it in another folder that exists, keeping its
+extension) and `make_folder`. `CONTEXT.md` and `MILESTONES.md` are never
+deleted, renamed or moved, and folders are never deleted or moved by an agent.
+Every change is a new version people can restore, and audited. Needs the
+Octopus Prime backend that answers `folder.delete`, `folder.move` and
+`folder.make_folder`; an earlier backend refuses those three as a request it
+does not understand (the agent is told the server may not offer them yet) and
+everything else works as in 1.38.6. Goes live after a Gateway restart.
+
+Agents set repeats and answer invitations. `octopus_calendar` creates and
+changes repeating events (daily, weekly on chosen days, or monthly; every so
+many days, weeks or months; until a day or so many times; `null` stops a
+repeat), with a meeting link, and its new `respond` action answers an event the
+person who asked is invited to (going, maybe or no), for them. `octopus_tasks`
+creates repeating tasks (from their due time, in the time zone given) and also
+changes a task's title, notes, priority, category, reminders and repeat. As
+before, the agent acts with the permissions of the person who asked and only
+where it is; what the app refuses that person, it refuses the agent. Needs the
+Octopus Prime backend that answers with `repeats` and takes `respond`; an
+earlier backend makes the event or task without the repeat (the agent is told
+the repeat was not set) and refuses `respond` as a request it does not
+understand. Goes live after a Gateway restart.
+
+## 1.38.7
+
+Setting up the first chat: a setup code the server refuses is now explained in
+plain words. Before, `openclaw channels add` printed `Octopus Prime bootstrap
+failed (410): {"detail":"Setup code expired"}` (the server's own JSON) for an
+expired code, and the same shape for a used or replaced one (404), too many
+tries (429), a server that was restarting (5xx), and `fetch failed` when it
+could not be reached at all. Now it prints one sentence that says what happened
+and what to do: an expired code (410) says so and to press New setup code in
+Settings › AI agents and run the command again with the new code; a used,
+replaced or invalid one (404) says that, with the same step; too many tries
+(429) says to wait a minute; a server error or no connection says Octopus
+Prime could not be reached and to try again in a minute; a plugin too old for
+the server (426) says to run `openclaw plugins update octopus-prime` and use a
+new code; any other answer says Octopus Prime did not accept the setup and
+gives only the HTTP status number. The server's reply, the code and the
+connection key are never printed. A refused setup still spends nothing and
+leaves an account that is already connected exactly as it was (it always did;
+now a test pins it). No backend change, no change to what is sent. Applies the
+next time `openclaw channels add` runs after the plugin is updated.
+
+## 1.38.6
+
+Agent Backup: a restore can reach every restore point a plan keeps. Before,
+`openclaw octopus-prime backup restore` could list, and `--point` could find,
+only the newest 100 restore points of a Gateway, which is about four days of an
+hourly plan (Backup 100 GB keeps up to 2,160 points over 90 days); the older
+ones were kept and counted against the storage but could not be chosen. Now
+`restore --point <id>` reads older pages until it finds the point, and two new
+options page through the list: `restore --list` prints the newest points with
+their ids (and restores nothing), and `restore --list --before <id>` (or
+`restore --before <id>`, to pick from that page) shows the 100 points older
+than that one. Needs the Octopus Prime backend that answers `backup.points`
+with `before` and `more`; against an earlier backend the first 100 points are
+listed and found exactly as before, and `--before` shows none older. No change
+to the backup format or to backups themselves. Goes live after a Gateway
+restart (the command runs in the Gateway's own process).
+
+## 1.38.5
+
+Two fixes to the first chat. A very long agent name no longer keeps a
+Gateway's agents out: the name an agent announces to Octopus Prime (its
+OpenClaw identity name) is now cut at 256 characters, the most the server
+takes. Before, one longer name made the server refuse the whole list of agents
+and close the connection, so the Gateway reconnected again and again and none
+of its agents appeared. Shorter names, and an agent with no name (its id is
+used), are announced as before. And an agent's reply to a session that was
+archived while it was still answering (a carry-over to a new session, or the
+person archived it) is no longer sent again five times: the server refuses it
+for good (`session_archived`), the plugin logs that once and the reply is
+settled as not sent. The late reply is not shown anywhere. A backend that does
+not send that reason is answered as before. Goes live after a Gateway restart.
+
 ## 1.38.4
 
 A large Agent Backup no longer holds up the Gateway while it packs files. Each
@@ -250,21 +405,7 @@ it. It goes live with a Gateway restart that loads this version.
 
 ## 1.29.0
 
-Your agent in your meetings. People can send an agent to a Zoom, Google Meet
-or Microsoft Teams meeting from Octopus Prime; the agent joins with OpenClaw's
-own meeting plugins (`zoom-meetings`, `google-meet`, `teams-meetings`) as an
-observe-only guest and, when the meeting should be over, posts the notes in
-that conversation (summary, decisions, action items, also added to the
-project's Project Log). A new optional capability, `meetings`: only on a
-connection whose backend offers it does the plugin report which meeting
-plugins this Gateway has (`meetings.report`, read from OpenClaw's config, shown
-in Settings › Plugin), give the agent a `meeting` context block on the turn
-that sends it or asks for the notes, offer the new `octopus_meeting` tool
-(status and notes, on 1.28.0's `work.request`), and send `meeting.due`
-when the meeting should be over. See "Your agent in your meetings" in the
-README. Any Octopus Prime backend that works with 1.28.0 works with this
-version; one without `meetings` gets none of it. It goes live with a Gateway
-restart that loads this version.
+Added sending agents to outside meetings (Zoom, Google Meet, Microsoft Teams), removed in 1.39.3.
 
 ## 1.28.0
 

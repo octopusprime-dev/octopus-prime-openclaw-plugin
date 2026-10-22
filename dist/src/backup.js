@@ -93,6 +93,29 @@ export class BackupRefusedError extends Error {
         this.frame = frame;
     }
 }
+/**
+ * Why a backup did not finish, as backup.abort tells the server (`reason`):
+ * a fixed list, never an error's text, so no path, file name, key or token can
+ * travel with it (backend/agent_backup.py FAILURE_REASONS).
+ */
+export const FAILURE_REASONS = ["upload_failed", "unreachable", "over_plan", "too_many_chunks", "incomplete", "interrupted", "other"];
+/** An error that already knows which of the FAILURE_REASONS it is. */
+export class BackupFailure extends Error {
+    reason;
+    constructor(message, reason) {
+        super(message);
+        this.reason = reason;
+    }
+}
+/** The reason a failed backup reports: the error's own, a refusal that names one, else "other". */
+export function failureReasonOf(error) {
+    if (error instanceof BackupFailure)
+        return error.reason;
+    if (error instanceof BackupRefusedError) {
+        return error.reason === "over_plan" || error.reason === "too_many_chunks" || error.reason === "incomplete" ? error.reason : "other";
+    }
+    return "other";
+}
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 /**
  * POSTs one call to the account's backend with its connector credential, never
@@ -116,7 +139,7 @@ export async function postBackupFrame(params) {
         });
     }
     catch {
-        throw new Error("The Octopus Prime server could not be reached for the backup; try again in a moment");
+        throw new BackupFailure("The Octopus Prime server could not be reached for the backup; try again in a moment", "unreachable");
     }
     let answer;
     try {
@@ -148,10 +171,10 @@ export async function putObject(fetchFn, url, headers, bytes) {
         });
     }
     catch {
-        throw new Error("A backup piece could not be uploaded");
+        throw new BackupFailure("A backup piece could not be uploaded", "upload_failed");
     }
     if (!response.ok)
-        throw new Error(`A backup piece was refused by storage (${response.status})`);
+        throw new BackupFailure(`A backup piece was refused by storage (${response.status})`, "upload_failed");
     try {
         await response.arrayBuffer();
     }

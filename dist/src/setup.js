@@ -46,22 +46,50 @@ function organizationIssue(cfg, accountId, orgId) {
         : `Organization ${orgId} is already connected by the Octopus Prime account "${other}". Use that account, or `
             + "revoke this new connector in OpenClaw agents.";
 }
+// What the person reads when the code's exchange is refused (1.38.7). The
+// words for the button and the menu are the app's own (ConnectorsDialog.jsx).
+const SETUP_AGAIN = "In Octopus Prime open Settings › AI agents, press New setup code on this Gateway's row, "
+    + "and run the command again with the new code.";
+const SETUP_UNREACHABLE = "Octopus Prime couldn't be reached. Try again in a minute.";
+export function setupRefusal(status) {
+    if (status === 410)
+        return `This setup code expired (a code lasts 15 minutes). ${SETUP_AGAIN}`;
+    if (status === 404)
+        return `This setup code was already used or replaced, or it is not valid. ${SETUP_AGAIN}`;
+    if (status === 429)
+        return "Too many setup attempts from this network. Wait a minute, then run the command again.";
+    if (status === 426) {
+        return "This plugin version is too old for Octopus Prime. Run openclaw plugins update octopus-prime, "
+            + "then run the command again with a new setup code.";
+    }
+    if (status >= 500)
+        return SETUP_UNREACHABLE;
+    return `Octopus Prime did not accept this setup (HTTP ${status}). Get a new setup code and try again.`;
+}
 export async function exchangeSetupCode(url, setupCode) {
     const backendUrl = normalizeIngressBackendUrl(url);
     if (typeof setupCode !== "string" || !setupCode.trim())
         throw new Error("Octopus Prime setup code is required");
-    const res = await fetch(`${backendUrl}/api/connector/bootstrap`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            code: setupCode.trim(),
-            plugin_version: PLUGIN_VERSION,
-            host_api_version: CONNECTOR_PROTOCOL_HOST,
-        }),
-    });
+    let res;
+    try {
+        res = await fetch(`${backendUrl}/api/connector/bootstrap`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                code: setupCode.trim(),
+                plugin_version: PLUGIN_VERSION,
+                host_api_version: CONNECTOR_PROTOCOL_HOST,
+            }),
+        });
+    }
+    catch {
+        // The reason (a host name, a socket error) is of no use to the person.
+        throw new Error(SETUP_UNREACHABLE);
+    }
     if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`Octopus Prime bootstrap failed (${res.status}): ${body}`);
+        // Only the status decides the sentence: the body is never printed.
+        await res.body?.cancel().catch(() => undefined);
+        throw new Error(setupRefusal(res.status));
     }
     const data = await res.json();
     const connectorToken = typeof data.connector_token === "string" && data.connector_token.trim()

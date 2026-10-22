@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir, open, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ABORT_FRAME, BACKUP_PLANS, BackupRefusedError, BEGIN_FRAME, CHUNK_MAX_BYTES, sizeText, CHUNK_PAGE, CHUNKS_FRAME, COMMIT_FRAME, DOWNLOAD_FRAME, KEYS_FRAME, MACHINES_FRAME, MANIFEST_FRAME, MANIFEST_MAX_BYTES, NAME_MAX, planFit, POINTS_FRAME, REBUILD_KIT_FILE, RESTORED_FRAME, SETUP_FRAME, SIGN_IN_MAX, SNAPSHOT_CHUNKS_MAX, STATUS_FRAME, statusOf, UPLOADED_FRAME, } from "./backup.js";
+import { ABORT_FRAME, BACKUP_PLANS, BackupFailure, BackupRefusedError, BEGIN_FRAME, CHUNK_MAX_BYTES, failureReasonOf, sizeText, CHUNK_PAGE, CHUNKS_FRAME, COMMIT_FRAME, DOWNLOAD_FRAME, KEYS_FRAME, MACHINES_FRAME, MANIFEST_FRAME, MANIFEST_MAX_BYTES, NAME_MAX, planFit, POINTS_FRAME, REBUILD_KIT_FILE, RESTORED_FRAME, SETUP_FRAME, SIGN_IN_MAX, SNAPSHOT_CHUNKS_MAX, STATUS_FRAME, statusOf, UPLOADED_FRAME, } from "./backup.js";
 import { mergeConfig, parseConfigText, redactConfig } from "./backup-config.js";
 import { chunkIdOf, decryptChunk, decryptManifest, deriveKeys, encryptManifest, keyIdOf, openEnvelope, openEnvelopeWithTyped, PIECE_MAX_BYTES, sealChunk, sha256Hex, } from "./backup-crypto.js";
 import { backupRoots, walkBackupFiles, } from "./backup-files.js";
@@ -92,14 +92,23 @@ async function rememberOpen(stateDir, connectorId, snapshotId) {
  * Gives up an open restore point (backup.abort). One the server already
  * closed or doesn't know is as good as given up; one it could not be told
  * about (no network, a killed process) stays remembered for the next run.
+ * `reason` (a code, never text) is how the server tells the Gateway's owner
+ * that the backup did not finish; a server that doesn't take it is told
+ * without.
  */
-async function giveUp(deps, snapshotId) {
+async function giveUp(deps, snapshotId, reason) {
     try {
-        await deps.call({ type: ABORT_FRAME, snapshot_id: snapshotId });
+        await deps.call({ type: ABORT_FRAME, snapshot_id: snapshotId, ...(reason ? { reason } : {}) });
     }
     catch (error) {
         if (!(error instanceof BackupRefusedError))
             throw error;
+        if (reason && error.reason === "invalid_request") {
+            await deps.call({ type: ABORT_FRAME, snapshot_id: snapshotId }).catch((again) => {
+                if (!(again instanceof BackupRefusedError))
+                    throw again;
+            });
+        }
     }
     await rm(openFile(deps.stateDir, deps.connectorId), { force: true });
 }
@@ -116,7 +125,7 @@ async function giveUpLeftOpen(deps, log) {
         await rm(openFile(deps.stateDir, deps.connectorId), { force: true }).catch(() => { });
         return;
     }
-    await giveUp(deps, snapshotId).catch((error) => {
+    await giveUp(deps, snapshotId, "interrupted").catch((error) => {
         log.warn(`the restore point a run left open was not given up yet: ${error instanceof Error ? error.message : String(error)}`);
     });
 }
@@ -126,6 +135,18 @@ async function saveIndex(stateDir, connectorId, index) {
     const temporary = `${file}.tmp`;
     await writeFile(temporary, JSON.stringify(index), { mode: 0o600 });
     await rename(temporary, file);
+}
+// -- backup -----------------------------------------------------------------------------------
+/** An upload of a sealed object; whatever stops it is reported as an upload that failed. */
+async function putSealed(io, url, headers, bytes) {
+    try {
+        await io.put(url, headers, bytes);
+    }
+    catch (error) {
+        if (error instanceof BackupFailure)
+            throw error;
+        throw new BackupFailure(error instanceof Error ? error.message : "A backup piece could not be uploaded", "upload_failed");
+    }
 }
 function uploadsOf(answer) {
     const list = Array.isArray(answer.upload) ? answer.upload : [];
@@ -218,7 +239,7 @@ class ChunkSender {
         }
         const sent = [];
         const failed = await pool(ready, this.concurrency, async (upload) => {
-            await this.io.put(upload.url, upload.headers, upload.bytes);
+            await putSealed(this.io, upload.url, upload.headers, upload.bytes);
             sent.push(upload);
         }).then(() => null, (error) => ({ error }));
         // What reached storage is confirmed even when another piece failed, so the next run doesn't send it again.
@@ -280,7 +301,7 @@ export async function runBackup(deps) {
     }
     catch (error) {
         // Not told (offline, killed): remembered, given up by the next run, and by the server within a day anyway.
-        await giveUp(deps, snapshotId).catch(() => { });
+        await giveUp(deps, snapshotId, failureReasonOf(error)).catch(() => { });
         throw error;
     }
 }
@@ -411,7 +432,7 @@ async function backUp(deps, keys, snapshotId, page, manifestMax, now, log) {
     });
     if (typeof link.url !== "string" || !isRecord(link.headers))
         throw new Error("The Octopus Prime server sent no link for the file list");
-    await deps.put(link.url, Object.fromEntries(Object.entries(link.headers).map(([name, value]) => [name, String(value)])), sealedManifest);
+    await putSealed(deps, link.url, Object.fromEntries(Object.entries(link.headers).map(([name, value]) => [name, String(value)])), sealedManifest);
     const committed = await deps.call({
         type: COMMIT_FRAME, snapshot_id: snapshotId, files: files.length, plain_bytes: plainBytes, chunks: sender.sealed.size,
     });
@@ -493,9 +514,25 @@ export async function listMachines(call) {
         last_backup_at: typeof machine.last_backup_at === "string" ? machine.last_backup_at : null,
     }));
 }
-export async function listPoints(call, connectorId) {
-    const answer = await call({ type: POINTS_FRAME, connector_id: connectorId });
-    return (Array.isArray(answer.points) ? answer.points : []).filter(isRecord)
+/** Whether `a` comes after `b` in the server's order, which is the order of a page's points. */
+function olderThan(a, b) {
+    const [x, y] = [a.made_at ?? "", b.made_at ?? ""];
+    return x < y || (x === y && a.snapshot_id < b.snapshot_id);
+}
+/**
+ * The restore points of a Gateway, newest first, at most 100 a page: the newest
+ * page, or with `before` the page of points older than that one. A backend that
+ * does not know `before` answers its newest page again; only points really older
+ * than `before` are kept, so it gives an empty page and no `more`, never a loop.
+ */
+export async function listPointsPage(call, connectorId, before) {
+    if (before && before.made_at === null)
+        return { points: [], more: false };
+    const answer = await call({
+        type: POINTS_FRAME, connector_id: connectorId,
+        ...(before ? { before: { made_at: before.made_at, snapshot_id: before.snapshot_id } } : {}),
+    });
+    const points = (Array.isArray(answer.points) ? answer.points : []).filter(isRecord)
         .filter((point) => typeof point.snapshot_id === "string")
         .map((point) => ({
         snapshot_id: point.snapshot_id,
@@ -503,7 +540,34 @@ export async function listPoints(call, connectorId) {
         files: typeof point.files === "number" ? point.files : 0,
         bytes: typeof point.bytes === "number" ? point.bytes : 0,
         kind: typeof point.kind === "string" ? point.kind : "scheduled",
-    }));
+    }))
+        .filter((point) => !before || olderThan(point, before));
+    return { points, more: answer.more === true && points.length > 0 };
+}
+/** The newest page of restore points (what a backend that does not page lists, and the most the picker offers at first). */
+export async function listPoints(call, connectorId) {
+    return (await listPointsPage(call, connectorId)).points;
+}
+/** A page limit for findPoint: 100 pages are 10,000 points, more than any plan keeps (Backup 100 GB: 2,160). */
+const POINT_PAGES_MAX = 100;
+const POINT_PAGE_GAP_MS = 250;
+/**
+ * One restore point of a Gateway by its id, however old: the newest page first
+ * (`first`, when the caller already has it), then each older page until the id
+ * is on one, the server says there are no more or a page is the last the limit allows. null: not found.
+ */
+export async function findPoint(call, connectorId, snapshotId, first) {
+    let page = first ?? await listPointsPage(call, connectorId);
+    for (let pages = 1;; pages += 1) {
+        const found = page.points.find((point) => point.snapshot_id === snapshotId);
+        if (found)
+            return found;
+        if (!page.more || pages >= POINT_PAGES_MAX)
+            return null;
+        // The server lets a Gateway make 5 backup calls a second after a burst of 20 (a 429 ends the restore): 4 a second at most.
+        await new Promise((resolve) => setTimeout(resolve, POINT_PAGE_GAP_MS));
+        page = await listPointsPage(call, connectorId, page.points[page.points.length - 1]);
+    }
 }
 /** Files that are already there and would be overwritten: a restore without `overwrite` stops before writing anything. */
 export class RestoreConflictError extends Error {

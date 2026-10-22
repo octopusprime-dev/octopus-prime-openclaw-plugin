@@ -14,11 +14,16 @@
  *   or add text at its end, always from the version it read. The backend
  *   refuses an edit of a file changed since, so nothing is overwritten.
  *
- * Only for that project's folder; never deletes, renames or makes folders,
- * and never touches the log book's CONTEXT.md and MILESTONES.md (the
- * octopus_log_book tool adds entries to those). Every change is a new version
- * that people in the project can view and restore. Text goes up to 1 MB each
- * way.
+ * Since 1.39.0 it also edits the log book's CONTEXT.md and
+ * MILESTONES.md in place (to remove outdated entries, fix wrong ones, mark
+ * milestones done or blocked; octopus_log_book still adds entries), deletes a
+ * file from the version it read (it moves to the project's Deleted list, where
+ * an owner or admin restores it for 30 days), moves or renames a file, and
+ * makes a folder. The log book's two files are never deleted, renamed or
+ * moved, and folders are never deleted or moved by an agent.
+ *
+ * Only for that project's folder. Every change is a new version that people
+ * in the project can view and restore. Text goes up to 1 MB each way.
  *
  * A backend with project folders offers "project-folder" in its welcome, to a
  * plugin that asked for it in the negotiation's optional field (src/protocol.ts),
@@ -32,6 +37,10 @@ export const LIST_FRAME = "folder.list";
 export const READ_FRAME = "folder.read";
 export const CREATE_FRAME = "folder.create";
 export const EDIT_FRAME = "folder.edit";
+// 1.39.0: a backend that knows them answers them; an earlier one refuses them as invalid_request.
+export const DELETE_FRAME = "folder.delete";
+export const MOVE_FRAME = "folder.move";
+export const MAKE_FOLDER_FRAME = "folder.make_folder";
 export const RESULT_FRAME = "folder.result";
 export const REJECTED_FRAME = "folder.rejected";
 // The backend's limits (backend/agent_folder.py): text each way in UTF-8 bytes,
@@ -45,6 +54,7 @@ const FIELD_MAX_CHARS = 128;
 export const BODY_MAX_BYTES = 4 * 1024 * 1024 + 16 * 1024;
 export const EDIT_MODES = ["replace", "find_replace", "append"];
 const TEXT_EXTENSIONS = [".md", ".markdown", ".txt", ".csv", ".json"];
+export const ACTIONS = ["list", "read", "create", "edit", "delete", "move", "make_folder"];
 // -- the agent's tool --------------------------------------------------------------
 export const FOLDER_TOOL_DESCRIPTION = [
     "Read and edit the files in this Octopus Prime project's Project Log (its shared folder) in place, for shared notes and documents.",
@@ -55,26 +65,37 @@ export const FOLDER_TOOL_DESCRIPTION = [
     "path, in a folder that exists, with text. action \"edit\": change a text file from the version you read: mode",
     "\"replace\" (text is the whole new text), \"find_replace\" (find is an exact piece of the file, replace what goes",
     "there; it must match once, or set replace_all), or \"append\" (text is added at the end). An edit of a file changed",
-    "since you read it is refused: read it again and redo the edit. Every change is a new version people can restore.",
-    "You cannot delete, rename or make folders, and CONTEXT.md and MILESTONES.md are kept with octopus_log_book.",
-    "Text goes up to 1 MB.",
+    "since you read it is refused: read it again and redo the edit. CONTEXT.md and MILESTONES.md (the project log) are",
+    "edited the same way: remove outdated entries, fix wrong ones, mark milestones done or blocked in place (add new",
+    "entries with octopus_log_book). action \"delete\": a file by its path or file_id, from the version you read; it",
+    "moves to the project's Deleted list, where an owner or admin can restore it for 30 days. action \"move\": rename a",
+    "file or put it in another folder that exists (to: its new path, same extension). action \"make_folder\": a new",
+    "folder at path. CONTEXT.md and MILESTONES.md are never deleted, renamed or moved. Every change is a new version",
+    "people can restore. Text goes up to 1 MB (256 KB for CONTEXT.md and MILESTONES.md).",
 ].join(" ");
 export const FOLDER_PARAMETERS = {
     type: "object",
     properties: {
         action: {
             type: "string",
-            enum: ["list", "read", "create", "edit"],
-            description: "list: the folder's folders and files. read: one file. create: a new text file. edit: change a text file.",
+            enum: [...ACTIONS],
+            description: "list: the folder's folders and files. read: one file. create: a new text file. edit: change a text "
+                + "file. delete: move a file to the Deleted list. move: rename or move a file. make_folder: a new folder.",
         },
         path: {
             type: "string",
-            description: "For read, create and edit: the file's path in the Project Log, its folders' names and its own "
-                + "joined by \"/\" (e.g. \"Meeting notes/2026-10-16.md\"), as the list shows it.",
+            description: "For read, create, edit, delete and move: the file's path in the Project Log, its folders' names and "
+                + "its own joined by \"/\" (e.g. \"Meeting notes/2026-10-16.md\"), as the list shows it. For make_folder: the "
+                + "new folder's path.",
         },
         file_id: {
             type: "string",
-            description: "For read and edit, instead of path: the file's file_id from the list.",
+            description: "For read, edit, delete and move, instead of path: the file's file_id from the list.",
+        },
+        to: {
+            type: "string",
+            description: "For move: the file's new path, its folders' names and its new name joined by \"/\" (the folders must "
+                + "exist; the extension stays the same).",
         },
         folder: {
             type: "string",
@@ -100,7 +121,7 @@ export const FOLDER_PARAMETERS = {
         version: {
             type: "integer",
             minimum: 1,
-            description: "For edit: the version of the file you read (the read and the list name it).",
+            description: "For edit and delete: the version of the file you read (the read and the list name it).",
         },
         mode: {
             type: "string",
@@ -197,16 +218,36 @@ export function folderRequest(session, params) {
         }
         return { type: CREATE_FRAME, ...place, path, text: sizedText(args, "text", true) };
     }
-    if (args.action !== "edit")
-        throw new Error("action must be list, read, create or edit");
+    if (args.action === "make_folder") {
+        if (args.file_id !== undefined)
+            throw new Error("make_folder takes a path, not a file_id");
+        const path = textArgument(args, "path", PATH_MAX_CHARS, "the new folder's path");
+        if (!path)
+            throw new Error("make_folder needs the new folder's path");
+        return { type: MAKE_FOLDER_FRAME, ...place, path };
+    }
+    if (args.action === "move") {
+        const target = fileTarget(args);
+        const to = textArgument(args, "to", PATH_MAX_CHARS, "the file's new path");
+        if (!to)
+            throw new Error("move needs to, the file's new path");
+        return { type: MOVE_FRAME, ...place, ...target, to };
+    }
+    const editing = args.action === "edit";
+    if (!editing && args.action !== "delete") {
+        throw new Error("action must be list, read, create, edit, delete, move or make_folder");
+    }
+    const target = fileTarget(args);
     const version = args.version;
     if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
-        throw new Error("edit needs the version of the file you read");
+        throw new Error(`${editing ? "edit" : "delete"} needs the version of the file you read`);
     }
+    if (!editing)
+        return { type: DELETE_FRAME, ...place, ...target, version };
     const mode = args.mode;
     if (!EDIT_MODES.includes(mode))
         throw new Error("mode must be replace, find_replace or append");
-    const edit = { type: EDIT_FRAME, ...place, ...fileTarget(args), version, mode };
+    const edit = { type: EDIT_FRAME, ...place, ...target, version, mode };
     if (mode === "find_replace") {
         const find = sizedText(args, "find", true);
         if (!find)
@@ -245,13 +286,14 @@ export function refusalMessage(reason, frame = {}) {
         case "not_found":
             return "No file has that path or file_id in this project's Project Log. List it to see what is there.";
         case "folder_not_found":
-            return "That folder is not in this project's Project Log. List it to see its folders; only people make folders.";
+            return "That folder is not in this project's Project Log. List it to see its folders, or make one with action make_folder.";
         case "ambiguous":
             return "Several files match that path. Name one by its file_id from the list.";
         case "is_folder":
             return "That is a folder, not a file. List what is in it with action list and folder set to its path.";
         case "log_book":
-            return "CONTEXT.md and MILESTONES.md are the project log: read them and add entries with octopus_log_book.";
+            return "CONTEXT.md and MILESTONES.md are the project log: they can't be deleted, renamed or moved, and no other "
+                + "file takes their names. To change what they say, edit them (read them first for their version).";
         case "not_text":
             return "Only UTF-8 text files (.md, .txt, .csv, .json) can be created or edited with the folder tool.";
         case "too_large":
@@ -277,7 +319,9 @@ export function refusalMessage(reason, frame = {}) {
         case "busy":
             return "The Project Log could not be read or saved just now. Try again in a moment.";
         case "invalid_request":
-            return "The Project Log did not understand the request.";
+            // A delete, move or make_folder sent to a backend from before 1.39.0's actions is refused this way too.
+            return "The Project Log did not understand the request. If it was a delete, move or make_folder, this Octopus "
+                + "Prime server may not offer it yet.";
         default:
             return "The Project Log refused the request.";
     }
@@ -344,12 +388,48 @@ function readResult(frame) {
         details: { ...details, offset, chars, next_offset: typeof next === "number" ? next : null },
     };
 }
+// 1.39.0: a file moved to the project's Deleted list, with when it is erased.
+function deleteResult(frame) {
+    const { path, file_id: fileId, deleted_at: deletedAt, purge_at: purgeAt } = frame;
+    if (typeof path !== "string" || typeof deletedAt !== "string" || typeof purgeAt !== "string")
+        throw new Error(UNREADABLE);
+    const days = typeof frame.keep_days === "number" ? ` (${counted(frame.keep_days, "day")})` : "";
+    return {
+        content: [{ type: "text", text: `Moved ${path} to the Project Log's Deleted list. An owner or admin can restore it `
+                    + `until ${purgeAt}${days}; then it is erased.` }],
+        details: { ok: true, action: "delete", path, file_id: fileId, deleted_at: deletedAt, purge_at: purgeAt },
+    };
+}
+function moveResult(frame) {
+    const { path, from, version, file_id: fileId } = frame;
+    if (typeof path !== "string" || typeof from !== "string" || typeof version !== "number")
+        throw new Error(UNREADABLE);
+    return {
+        content: [{ type: "text", text: `Moved ${from} to ${path} (still version ${version}).` }],
+        details: { ok: true, action: "move", path, from, file_id: fileId, version },
+    };
+}
+function makeFolderResult(frame) {
+    const { path, folder_id: folderId } = frame;
+    if (typeof path !== "string" || typeof folderId !== "string")
+        throw new Error(UNREADABLE);
+    return {
+        content: [{ type: "text", text: `Made the folder ${path} in the Project Log.` }],
+        details: { ok: true, action: "make_folder", path, folder_id: folderId },
+    };
+}
 /** What the agent gets back from the backend's `folder.result` for its call. Anything else is no answer. */
 export function folderToolResult(request, frame) {
     if (request.type === LIST_FRAME)
         return listResult(frame);
     if (request.type === READ_FRAME)
         return readResult(frame);
+    if (request.type === DELETE_FRAME)
+        return deleteResult(frame);
+    if (request.type === MOVE_FRAME)
+        return moveResult(frame);
+    if (request.type === MAKE_FOLDER_FRAME)
+        return makeFolderResult(frame);
     const { path, version, size } = frame;
     if (typeof path !== "string" || typeof version !== "number" || typeof size !== "number")
         throw new Error(UNREADABLE);

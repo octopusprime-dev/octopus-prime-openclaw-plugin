@@ -2,7 +2,6 @@ import { join, resolve } from "node:path";
 import { validateIngressOrigin } from "./ingress-origin.js";
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { parseInboundPictures } from "./inbound-media.js";
-import { parseMeetingMark } from "./meetings.js";
 import { SqliteIngressQueue } from "./sqlite-ingress-queue.js";
 // The backend's ids: letters, digits, "_" and "-". Anything else is no project.
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -47,7 +46,6 @@ export function parseInboundFrame(raw) {
     const agentSession = frame.agent_session === true;
     const continuation = frame.session_continuation === true;
     const edited = frame.edited === true;
-    const meeting = parseMeetingMark(frame.meeting);
     const pictures = parseInboundPictures(frame.files);
     return {
         type: "message.inbound",
@@ -69,7 +67,6 @@ export function parseInboundFrame(raw) {
         ...(agentSession ? { agent_session: true } : {}),
         ...(continuation ? { session_continuation: true } : {}),
         ...(edited ? { edited: true } : {}),
-        ...(meeting ? { meeting } : {}),
         ...(pictures ? { files: pictures } : {}),
     };
 }

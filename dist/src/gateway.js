@@ -90,6 +90,8 @@ export const octopusGateway = {
                 accountId,
                 connectorId: pinned.connectorId,
                 orgId: pinned.orgId,
+                // What `openclaw channels status` says of this account (1.39.5).
+                reportStatus: (status) => { ctx.setStatus?.(status); },
             }, transportDeps);
             await stopped;
         }

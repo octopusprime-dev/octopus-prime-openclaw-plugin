@@ -1,4 +1,9 @@
-/** Durable adoption is necessary but not sufficient: wait for core reply-start. */
+/**
+ * Durable adoption is necessary but not sufficient: wait for core's start of
+ * the turn, which is the agent's run starting or core's reply-start, whichever
+ * comes first (src/host-dispatch.ts). A message still queued behind another
+ * turn has neither.
+ */
 export function createWorkingStatusGate(options) {
     const original = options.lifecycle;
     let adopted = false;

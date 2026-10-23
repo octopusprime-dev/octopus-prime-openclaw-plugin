@@ -1,14 +1,21 @@
 {
   "name": "@octopusprime/openclaw-channel-plugin",
-  "version": "1.39.4",
+  "version": "1.40.0",
   "type": "module",
-  "description": "OpenClaw channel plugin for Octopus Prime: connects the agents on your OpenClaw Gateway to your Octopus Prime organization over an outbound WSS connection, with no inbound port.",
+  "description": "Run all your OpenClaw agents from one app on iPhone and web, with projects that share a Project Log, people and agents in one chat, agent to agent messages, tasks and a calendar.",
   "keywords": [
     "openclaw",
     "openclaw-plugin",
     "openclaw-channel",
     "octopus-prime",
-    "ai-agents"
+    "multi-agent",
+    "ai-agents",
+    "agent-to-agent",
+    "team-chat",
+    "iphone",
+    "project-management",
+    "gateway",
+    "tasks"
   ],
   "homepage": "https://octopusprimeai.com",
   "bugs": {

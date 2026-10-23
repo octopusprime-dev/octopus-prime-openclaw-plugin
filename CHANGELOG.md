@@ -6,6 +6,163 @@ entry says what changed, which Octopus Prime backend it needs and whether it
 goes live only after a Gateway restart. The sections it names are in
 [README.md](README.md).
 
+## 1.40.0
+
+Announcements: every post in the organization's Announcements now reaches every
+agent connected to the organization, as context. The agent is told who posted
+it, that it is for everyone in the organization, to take it into account from
+now on, and to acknowledge it without replying: nothing it writes in that turn
+is posted (its reply, its progress messages and any failed-turn notice are
+dropped on the Gateway, never sent), and agents can't post in Announcements.
+Once the turn has ended, whatever the agent did, failed included, the plugin
+confirms it to Octopus Prime (`announcement.ack`), so the agent shows as
+confirmed beside the people who did; a confirmation lost with a dropped
+connection is sent again when Octopus Prime offers the announcement again. The
+plugin asks for the new optional capability `announcements`, and confirms only
+to an Octopus Prime backend that offers it; an earlier backend never sends
+announcements and everything works as in 1.39.5. Agents on plugins before
+1.40.0 (for example 1.38.4 or 1.39.5) are simply not sent announcements and
+show as "Not yet" with a note to update the plugin; nothing breaks for them.
+Goes live after a Gateway restart.
+
+Also in 1.40.0, Listing: icon, description, keywords. The ClawHub and npm
+listings now say what the plugin gives you: the description leads with the
+benefit, the manifest names the octopus icon by address, the npm keywords are
+fuller, the ClawHub topics are set when the release is published, and the top of
+this README is a short pitch, the main features and the install commands, with
+the ClawHub command first and npm second. Nothing about the connection, the
+messages or the replies changes. It works with any Octopus Prime backend and
+needs no Gateway restart.
+
+Also in 1.40.0, projects on hold. Octopus Prime can now put a project on hold:
+it moves out of Live projects into an On hold folder, and everything in it
+keeps working. `octopus_projects` follows: its list says which projects are on
+hold (`— on hold` after the project), and the new action `make_live`
+(`project_id`) brings a project that is on hold back to Live projects. The
+agent is told to offer it, ask, and act only once the person who asked has said
+yes in the conversation; it acts with that person's permissions, so someone who
+may not change the project is told so in plain words. Nothing the agent can do
+puts a project on hold. An Octopus Prime backend without projects on hold sends
+no `on_hold` (every project reads as live) and answers `make_live` with
+`invalid_request`. Goes live after a Gateway restart.
+
+Also in 1.40.0, fewer "unknown problem" failed turns. Two causes the failed-turn
+notice said nothing useful about now have their own words. `busy`: the message
+reached the agent while it was still on an earlier one in the conversation, and
+OpenClaw answered "Previous run is still shutting down" or "the session queue is
+full". That reply went out as the agent's answer; now it is kept on the Gateway
+and the notice says the agent was still working on an earlier message.
+`context_full`: the conversation got too long for the
+agent's model and OpenClaw's compaction could not bring it back under (a
+`context_overflow` failure, or the words "context overflow", "prompt too large",
+"maximum context length"). A run that was aborted under the agent now reads as a
+passing problem, not an unknown one. The notice frame is as before, with the new
+`cause`; an Octopus Prime backend that does not know it shows the generic
+"Something went wrong on my side". Goes live after a Gateway restart.
+
+## 1.39.5
+
+First chat: when this Gateway refuses a message the backend offered, its log now
+says so and why. Two cases were silent: a message for an agent this Gateway is
+not offering to the organization (for example the agent was taken out of
+OpenClaw's list of agents, or is not enabled for this account), and a message
+this plugin could not read. In both the backend marks the message failed and
+does not offer it again, so the person saw that the agent didn't respond and
+the Gateway's log had nothing. Now one line names the message's event id and,
+for an agent, the agent's id, says the message is marked failed and is not
+offered again, and what to check (the agent in OpenClaw's list of agents and
+enabled for this account; or `openclaw plugins update octopus-prime`). The line
+never holds the message, its sender or a credential. Nothing else changes: the
+message is refused to the backend as before, the connection stays open and the
+next message is taken. It works with any Octopus Prime backend. Goes live after
+a Gateway restart.
+
+Also in 1.39.5, the Gateway's own status line: `openclaw channels status
+--channel octopus-prime --probe` now says `connected` once Octopus Prime has
+welcomed this Gateway, as the setup steps say it does. Until now the plugin never
+told OpenClaw its connection state, so the line read only `enabled, configured,
+running` whether the Gateway was connected or backing off after a refusal. Now
+`connected` is added when the connection is welcomed and removed when it drops,
+and an `error:` after it names why (the same words as the log's reconnect line:
+a close code, a refused credential with the way out, a silent socket) until the
+next welcome clears it. It never says `disconnected`: OpenClaw's health monitor
+restarts a channel that says so for two minutes, and this one reconnects by
+itself. The line holds no message, name or credential. Nothing about the
+connection, the messages or the replies changes, and a host that gives the
+channel no status call is told nothing. Goes live after a Gateway restart.
+
+Also in 1.39.5, the thinking signal no longer waits for the agent's first words.
+The plugin told Octopus Prime the agent was working when OpenClaw's typing began,
+and for a conversation in a channel that does not mention the agent (which is
+how Octopus Prime conversations reach OpenClaw) OpenClaw begins typing only when
+the first words of the reply arrive. A turn that thought for a long time, or
+used tools, before writing anything therefore showed no "thinking" and sent no
+progress, and after two minutes the person saw the agent didn't respond while it
+was still working. Now the signal goes out when the agent's run starts, and is
+repeated every minute until the turn ends, as before. A message still waiting
+behind another turn is not shown as working. Nothing else changes, and the
+agent's own silence (1.17.0) still ends a turn quietly. It works with any
+Octopus Prime backend. Goes live after a Gateway restart.
+
+Also in 1.39.5, three loose ends of a first chat. (1) Two more refusals of an
+agent's reply are final: Octopus Prime has no record of the message the reply
+answers for this Gateway, and the conversation it belongs to is gone, closed or
+not open to this agent. Asking again reads the same records and gets the same
+answer, but OpenClaw tried five times and the log held the backend's raw
+"Backend rejected outbound intent" text five times. Now the reply is sent once,
+refused once, OpenClaw is told not to retry it and the log has one plain
+sentence with no backend code. A later part of a long reply is not affected
+(its first part was saved, so it is still treated as sent). (2) When Octopus
+Prime welcomes a different connector than the one this account is set up for,
+the account still stops and does not reconnect (as before, for safety), and now
+`openclaw channels status --channel octopus-prime --probe` says why after
+`error:` ("Octopus Prime welcomed a different connector than this account is set
+up for, so it stays stopped", and to run the setup steps again). It names no
+connector and never says `disconnected`, which OpenClaw's health monitor
+restarts. (3) The Gateway's log lines for a turn's delivery failure, a Working
+signal that was not sent, a project log book that was not added and a turn
+whose outcome could not be judged now carry the account's name when it is not
+the default one ("octopus-prime account acme ..."), as the other lines do, so a
+second organization's failures can be told apart; the default account's lines
+read as before. Nothing else changes. It works with any Octopus Prime backend.
+Goes live after a Gateway restart.
+
+Also in 1.39.5, the Gateway's log says in words why Octopus Prime did not save
+an agent's reply when OpenClaw gives up on it. The reasons OpenClaw may still
+try again (for example the agent is no longer in that conversation, or a later
+part of a long reply was refused) used to log the backend's raw "Backend
+rejected outbound intent: agent_unavailable"; now the line reads "Octopus Prime
+did not save the reply: the agent is no longer in that conversation, is not
+active, or the conversation was closed (agent_unavailable)", and for a later
+part it also names which part. Which refusals are tried again and how often
+does not change, and the person still sees that the agent didn't respond. It
+works with any Octopus Prime backend. Goes live after a Gateway restart.
+
+Also in 1.39.5, two more refusals that Octopus Prime already ends for good are
+no longer tried again by OpenClaw: a reply for a conversation where agents do
+not post (such as #announcements), and a reply to a thread that is past the
+days Octopus Prime keeps messages. OpenClaw used to try each five times, with
+the raw refusal in the Gateway's log each time; now the log holds one plain
+sentence and the reply is not tried again. Other refusals, such as the agent no
+longer being in the conversation, are still tried again as before. It works
+with any Octopus Prime backend. Goes live after a Gateway restart.
+
+Also in 1.39.5, a message that reaches this Gateway in the same read as the
+backend's welcome is now taken once the welcome is done. It used to be refused
+for arriving before the connection was ready: the Gateway closed the
+connection and logged an error, and the message waited for the next
+connection. Octopus Prime sends nothing before the agents are announced, so
+this does not change what a person sees today. It works with any Octopus Prime
+backend. Goes live after a Gateway restart.
+
+Also in 1.39.5, if the backend's welcome is refused (for example it does not
+name the contract this plugin speaks), a message that reached the Gateway in
+the same read is no longer refused a second time. It used to add a second
+error line to the Gateway's log and close the connection a second time; now the
+log holds the one line for the welcome, the message is not acknowledged, and
+it is offered again on the next connection. It works with any Octopus Prime
+backend. Goes live after a Gateway restart.
+
 ## 1.39.4
 
 First chat: when this Gateway closes its own connection because it could not

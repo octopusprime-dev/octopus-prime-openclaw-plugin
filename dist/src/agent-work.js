@@ -127,13 +127,20 @@ export const PROJECTS_TOOL_DESCRIPTION = [
     "Create projects in Octopus Prime when someone asks, or list the projects you are in.",
     "create: a project with the person who asked and you in it, with its usual starter channels. Only an Owner,",
     "Admin or Manager of the organization may have one created; if the person who asked may not, tell them so.",
+    "list: also says which projects are on hold.",
+    "make_live: bring a project that is on hold back to Live projects. Do it only after the person who asked has",
+    "said yes in this conversation: offer it, ask them, and act only on their yes.",
+    "Nothing here can put a project on hold.",
 ].join(" ");
 export const PROJECTS_PARAMETERS = {
     type: "object",
     properties: {
-        action: { type: "string", enum: ["create", "list"], description: "create a project, or list yours." },
+        action: { type: "string", enum: ["create", "list", "make_live"],
+            description: "create a project, list yours, or make one that is on hold live again (only after the person "
+                + "who asked said yes)." },
         name: { type: "string", description: "create: the project's name (up to 80 characters)." },
         description: { type: "string", description: "create: what the project is (up to 500 characters)." },
+        project_id: { type: "string", maxLength: 128, description: "make_live: the project's ID (prj_...)." },
     },
     required: ["action"],
     additionalProperties: false,
@@ -144,12 +151,12 @@ const ARGUMENTS = {
         "scope", "status", "limit", "task_id", "text"],
     calendar: ["title", "start", "end", "all_day", "timezone", "description", "location", "meeting_link", "attendees",
         "reminders", "repeat", "place", "scope", "event_id", "response"],
-    projects: ["name", "description"],
+    projects: ["name", "description", "project_id"],
 };
 const ACTIONS = {
     tasks: ["create", "list", "update", "comment"],
     calendar: ["create", "list", "update", "cancel", "respond"],
-    projects: ["create", "list"],
+    projects: ["create", "list", "make_live"],
 };
 /**
  * The frame a tool call sends, or the reason it is refused before anything is
@@ -161,6 +168,10 @@ export function workRequest(session, tool, params) {
     const given = (params && typeof params === "object" ? params : {});
     if (typeof given.action !== "string" || !ACTIONS[tool].includes(given.action)) {
         throw new Error(`action must be one of: ${ACTIONS[tool].join(", ")}`);
+    }
+    if (tool === "projects" && given.action === "make_live"
+        && (typeof given.project_id !== "string" || !given.project_id.trim())) {
+        throw new Error("make_live needs the project's ID (project_id)");
     }
     const args = {};
     for (const key of ARGUMENTS[tool]) {
@@ -259,6 +270,8 @@ function projectLine(project) {
         ? project.channels.filter(isRecord).map((channel) => `#${oneLine(channel.name)}`).join(", ") : "";
     return `${quoted(project.name)} (ID ${oneLine(project.project_id)})${channels ? `, channels ${channels}` : ""}`;
 }
+// A project the list names, and whether it is on hold (no `on_hold`, from an earlier backend: live).
+const listedProjectLine = (project) => `${projectLine(project)}${project.on_hold === true ? " — on hold" : ""}`;
 const UNREADABLE = "Backend sent an answer to the request that could not be read";
 // A repeat the agent asked for that the answer does not show: a backend
 // without repeats does not read `repeat`, and its answer has no `repeats`
@@ -326,8 +339,17 @@ export function workToolResult(request, frame) {
         const projects = frame.projects.filter(isRecord);
         text = projects.length
             ? [`${projects.length} project${projects.length === 1 ? "" : "s"} you are in:`,
-                ...projects.map((project) => `- ${projectLine(project)}`)].join("\n")
+                ...projects.map((project) => `- ${listedProjectLine(project)}`)].join("\n")
             : "You are in no project of this organization that the person who asked is in too.";
+    }
+    else if (action === "make_live") {
+        if (!isRecord(frame.project))
+            throw new Error(UNREADABLE);
+        const project = frame.project;
+        const named = `${quoted(project.name)} (ID ${oneLine(project.project_id)})`;
+        text = project.was_on_hold === false
+            ? `Project ${named} was already live.`
+            : `Made project ${named} live again; it is back in Live projects.`;
     }
     else {
         if (!isRecord(frame.project))

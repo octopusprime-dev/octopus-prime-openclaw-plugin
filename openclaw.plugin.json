@@ -4,7 +4,8 @@
     "octopus-prime"
   ],
   "name": "Octopus Prime",
-  "description": "Octopus Prime channel plugin — secure outbound connector to the hosted Octopus Prime backend.",
+  "description": "Run all your OpenClaw agents from one app on iPhone and web, with projects that share a Project Log, people and agents in one chat, agent to agent messages, tasks and a calendar.",
+  "icon": "https://octopusprimeai.com/icon-512.png",
   "categories": [
     "channels"
   ],

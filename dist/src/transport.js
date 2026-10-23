@@ -35,7 +35,8 @@ import { MESSAGE_EDITED_FRAME, noteMessageEdited, parseMessageEdited } from "./m
 import { BUSY_SAMPLE_EVERY_MS, hostCommandRunner, loadProtectionOf, machineSampler, machineStatsShared, } from "./machine-stats.js";
 import { folderBody, REJECTED_FRAME as FOLDER_REJECTED, RESULT_FRAME as FOLDER_RESULT } from "./project-folder.js";
 import { ANSWER_FRAME, answerResultFrame, closedFrame, parseQuestionAnswer, resolveAnswer, } from "./questions.js";
-import { AGENT_APPROVALS_CAPABILITY, AGENT_USAGE_CAPABILITY, AGENT_WORK_CAPABILITY, ASK_USER_CAPABILITY, assertProtocolWelcome, BACKUP_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, INBOUND_MEDIA_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, RICH_PRESENTATION_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
+import { ANNOUNCEMENT_REPLY_DROPPED, announcementAckFrame, } from "./announcement.js";
+import { AGENT_APPROVALS_CAPABILITY, AGENT_USAGE_CAPABILITY, ANNOUNCEMENTS_CAPABILITY, AGENT_WORK_CAPABILITY, ASK_USER_CAPABILITY, assertProtocolWelcome, BACKUP_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, INBOUND_MEDIA_CAPABILITY, LOG_BOOK_CAPABILITY, MACHINE_STATS_CAPABILITY, negotiationFrame, PROJECT_FOLDER_CAPABILITY, RICH_PRESENTATION_CAPABILITY, SESSION_STATS_CAPABILITY, SESSION_TITLE_CAPABILITY, SLASH_COMMANDS_CAPABILITY, TURN_SILENCE_CAPABILITY, welcomeOffers, } from "./protocol.js";
 import { readSessionEntry, readSessionStats, sessionStatsFrame } from "./session-stats.js";
 import { commandsReport } from "./slash-commands.js";
 import { turnUsage, usageFrame, UsageMemory } from "./usage.js";
@@ -139,6 +140,27 @@ function rosterRefusedReason() {
 const UNREADABLE_FRAME_REASON = "socket closed by this Gateway (code 1002) because a frame from the backend was not readable";
 const UNHANDLED_FRAME_REASON = "socket closed by this Gateway (code 1002) because it could not take a frame from the backend "
     + "(the inbound error line above says why; a message offered with it is not acknowledged and is offered again)";
+/** The event id of an offered frame for a log line: a string, cut short, else "unknown". */
+function refusedEventId(frame) {
+    const id = typeof frame.event_id === "string" ? Array.from(frame.event_id).slice(0, 64).join("") : "";
+    return id || "unknown";
+}
+/**
+ * The Gateway log's line for a message offered and refused (the backend then
+ * marks it failed and does not offer it again; the person sees the agent did
+ * not answer). Names the event id and, for an agent, its id cut short and
+ * quoted; never the message, its sender or a token.
+ */
+function refusedMessageLine(refusal) {
+    if (refusal.kind === "agent") {
+        const agent = JSON.stringify(Array.from(refusal.detail).slice(0, 64).join(""));
+        return `refused message ${refusal.eventId}: it is for agent ${agent}, which this Gateway is not offering to this organization. `
+            + "The message is marked failed in Octopus Prime and is not offered again. Check that the agent is in OpenClaw's list of "
+            + "agents and enabled for this account, then send the message again";
+    }
+    return `refused message ${refusal.eventId}: this plugin could not read it (${refusal.detail}). The message is marked failed `
+        + "in Octopus Prime and is not offered again. If this repeats, run openclaw plugins update octopus-prime";
+}
 /** An agent's name as announced: cut at the backend's limit, never mid-character. */
 function announcedName(name) {
     const characters = Array.from(name);
@@ -255,11 +277,12 @@ export class AuditRefusedError extends Error {
     }
 }
 // The backend's refusal of a reply frame, with its reason (identity_conflict,
-// source_expired, ...).
+// source_expired, ...). Its message is what the Gateway's log shows when core
+// gives up on the reply (1.39.5): one plain sentence, the code after it.
 class OutboundRejectedError extends Error {
     reason;
     constructor(reason) {
-        super(`Backend rejected outbound intent: ${reason}`);
+        super(`Octopus Prime did not save the reply: ${OUTBOUND_REFUSALS[reason] ?? "the backend refused it"} (${reason})`);
         this.reason = reason;
     }
 }
@@ -279,6 +302,16 @@ const POST_REFUSALS = {
     invalid_attachments: "its files were not named as file ids",
     attachments_unavailable: "a file it named was not uploaded for it or is no longer kept",
 };
+// What each reason of `message.outbound.rejected` means: the reasons a post
+// shares with it (POST_REFUSALS) and the ones only a reply gets.
+const OUTBOUND_REFUSALS = {
+    ...POST_REFUSALS,
+    delivery_unknown: "Octopus Prime has no record of the message it answers for this Gateway",
+    agent_unavailable: "the agent is no longer in that conversation, is not active, or the conversation was closed",
+    invalid_reply: "the agent's reply had no text",
+    source_expired: "the message it answers is no longer kept",
+    source_retention_expired: "the thread it answers is past the days Octopus Prime keeps messages",
+};
 /** The backend refused a post with no message to answer (1.10.0), with its reason. */
 export class PostRefusedError extends Error {
     reason;
@@ -293,11 +326,20 @@ export class PostRefusedError extends Error {
 // nothing from an agent (1.38.5). The reply had no text (1.39.1; the same frame
 // gets the same answer, and the person's message stays open for a real one).
 // The message it answers is no longer kept (1.39.1; the backend has ended that
-// delivery).
+// delivery). Octopus Prime has no delivery of this connector under the event
+// the reply names, or no such conversation any more (1.39.5; the backend asks
+// the same stored records again for every try). Agents do not post in that
+// conversation, or the thread it answers is past the days Octopus Prime keeps
+// messages (1.39.5; the backend has ended that delivery, and neither changes by
+// asking again).
 const FINAL_REFUSALS = {
+    delivery_unknown: "Octopus Prime has no record of the message it answers for this Gateway, so the reply cannot be saved",
+    channel_unavailable: "that conversation is gone, closed, or not open to this agent, so nothing can be saved in it",
     session_archived: "that session was archived and is read only (session_archived)",
     invalid_reply: "the agent's reply had no text, so there was nothing to show. If the agent sends no other answer, the person sees that it didn't respond",
     source_expired: "the message it answers is no longer kept in Octopus Prime",
+    agent_posting_closed: "agents do not post in that conversation, so nothing can be saved in it",
+    source_retention_expired: "the thread it answers is past the days Octopus Prime keeps messages, so the reply cannot be saved",
 };
 /**
  * The end of a send the backend refused for good: core's marker for a message
@@ -336,11 +378,16 @@ const askSockets = new WeakSet();
 const mediaSockets = new WeakSet();
 // Sockets whose backend offered Agent Backup in its welcome (1.38.0).
 const backupSockets = new WeakSet();
+// Sockets whose backend offered announcements in its welcome (1.40.0).
+const announcementSockets = new WeakSet();
 // Whether a reply carries a card or a question beside its words.
 const hasExtras = (params) => params.presentation !== undefined || params.ask !== undefined;
 // How many messages whose turn ended in silence an account remembers, to settle
 // them again when the backend offers one again.
 const REMEMBERED_SILENT_TURNS = 1_000;
+// How many confirmed announcements an account remembers, to confirm them
+// again when the backend offers one again (1.40.0).
+const REMEMBERED_ANNOUNCEMENTS = 1_000;
 function httpBase(url) {
     return url.replace(/\/+$/, "");
 }
@@ -369,6 +416,7 @@ export function createTransportInboundHandler(options) {
             return;
         const agentId = typeof frame.agent_id === "string" ? frame.agent_id : "";
         if (!agentId || !options.isAgentAllowed(agentId)) {
+            options.onRefused?.({ kind: "agent", eventId: refusedEventId(frame), detail: agentId });
             options.send({
                 type: "message.rejected",
                 event_id: typeof frame.event_id === "string" ? frame.event_id : "",
@@ -380,6 +428,7 @@ export function createTransportInboundHandler(options) {
             options.onOffered?.(frame.event_id);
         const result = await options.admission.receive(frame);
         if (result.kind === "invalid") {
+            options.onRefused?.({ kind: "frame", eventId: refusedEventId(frame), detail: result.message });
             options.send({
                 type: "message.rejected",
                 event_id: typeof frame.event_id === "string" ? frame.event_id : "",
@@ -392,6 +441,9 @@ export function createTransportInboundHandler(options) {
         options.send({ type: "ack", event_id: frame.event_id });
     };
 }
+// What the status line says when the backend welcomes a connector other than
+// the one this account is pinned to. The account stays stopped; no id in it.
+const PIN_MISMATCH_STATUS = "Octopus Prime welcomed a different connector than this account is set up for, so it stays stopped. Run the setup steps again for this account, or check its connector id";
 // The running transports, by account id.
 const transports = new Map();
 // The files uploaded from this Gateway process (1.11.0), by backend,
@@ -688,6 +740,7 @@ function createAccountTransport(accountId) {
     let ws = null;
     let createSocket = (url, options) => new WebSocket(url, options);
     let hostApi = null;
+    let reportStatus = () => undefined;
     let backendUrl = "";
     let token = "";
     let heartbeat = null;
@@ -739,6 +792,9 @@ function createAccountTransport(accountId) {
     // id of the message each answered: settled again if the backend offers the
     // message again, e.g. when the frame was lost with a closing socket.
     const silentTurns = new Map();
+    // The announcements whose turn ended (1.40.0), by event id: confirmed
+    // again if the backend offers one again, and nothing answering one is sent.
+    const announcementAcks = new Map();
     // The usage last reported for each session (1.30.0, src/usage.ts), so a
     // row the turn did not change is not reported twice.
     const usageMemory = new UsageMemory();
@@ -761,6 +817,11 @@ function createAccountTransport(accountId) {
         const machine = deps.machineSampler ?? machineSampler(hostCommandRunner(api.runtime?.system));
         sampler = machine;
         hostApi = api;
+        // A status that cannot be set changes nothing about the connection.
+        reportStatus = (status) => { try {
+            cfg.reportStatus?.(status);
+        }
+        catch { /* the host's status is not the connection */ } };
         const generation = {};
         transportGeneration = generation;
         activeRuntimeBinding = pinned;
@@ -783,7 +844,8 @@ function createAccountTransport(accountId) {
                 const startedAt = Date.now();
                 let failed;
                 let silent = false;
-                const turn = { replying: false, replied: false };
+                const announced = frame.announcement === true;
+                const turn = { replying: false, replied: false, ...(announced ? { announcement: true } : {}) };
                 activeTurns.set(frame.event_id, turn);
                 try {
                     await dispatchOctopusInbound({
@@ -815,7 +877,11 @@ function createAccountTransport(accountId) {
                     if (activeTurns.get(frame.event_id) === turn)
                         activeTurns.delete(frame.event_id);
                     working.stop();
-                    if (failed)
+                    // An announcement's turn (1.40.0) is confirmed whatever its outcome:
+                    // no notice, no progress as its answer, no silent frame.
+                    if (announced)
+                        sendAnnouncementAck(frame, generation);
+                    else if (failed)
                         sendTurnFailedNotice(frame, failed, generation);
                     else if (!turn.replied && turn.lastProgress)
                         endTurnOnProgress(turn.lastProgress, generation);
@@ -969,11 +1035,47 @@ function createAccountTransport(accountId) {
             hostApi?.logger.warn(`${log} the silent turn of event ${settled.event_id} was not reported`);
         }
     }
-    // The backend offers a message again: if its turn ended in silence, settle it again.
+    // The backend offers a message again: if its turn ended in silence, settle it
+    // again; if it is an announcement whose turn ended, confirm it again (1.40.0).
     function settleSilentTurn(socket, eventId) {
+        if (ws !== socket || stopped)
+            return;
         const settled = silentTurns.get(eventId);
-        if (settled && ws === socket && !stopped)
+        if (settled)
             writeTurnSilent(socket, settled);
+        const ack = announcementAcks.get(eventId);
+        if (ack)
+            writeAnnouncementAck(socket, ack);
+    }
+    /**
+     * An announcement's turn ended (1.40.0, src/announcement.ts), whatever the
+     * agent did, failed included: tells the backend the agent received and
+     * processed it with an `announcement.ack` frame, which settles its delivery
+     * and records the agent's confirmation. Sent on the current socket only if
+     * that socket's backend offered announcements, best effort and never
+     * awaited. Remembered, so a frame that is not sent (no socket just now) is
+     * sent when the backend offers the announcement again (settleSilentTurn).
+     */
+    function sendAnnouncementAck(frame, generation) {
+        if (transportGeneration !== generation || stopped)
+            return;
+        const ack = { event_id: frame.event_id, channel_id: frame.channel_id, agent_id: frame.agent_id };
+        announcementAcks.delete(frame.event_id);
+        announcementAcks.set(frame.event_id, ack);
+        while (announcementAcks.size > REMEMBERED_ANNOUNCEMENTS)
+            announcementAcks.delete(announcementAcks.keys().next().value);
+        writeAnnouncementAck(ws, ack);
+    }
+    // Writes the frame on this socket if it is open, negotiated and from a backend that offered announcements.
+    function writeAnnouncementAck(socket, ack) {
+        if (!socket || !negotiated || socket.readyState !== WebSocket.OPEN || !announcementSockets.has(socket))
+            return;
+        try {
+            socket.send(JSON.stringify(announcementAckFrame(ack)));
+        }
+        catch {
+            hostApi?.logger.warn(`${log} the announcement of event ${ack.event_id} was not confirmed`);
+        }
     }
     /**
      * Once a turn completed, reports how full its session is now
@@ -1024,6 +1126,9 @@ function createAccountTransport(accountId) {
         const delay = Math.min(1_000 * 2 ** retry, 15_000);
         // Never the token (or the handshake headers) in a log line.
         hostApi?.logger.warn(`${log} connector ${reason}; reconnecting in ${delay / 1_000} seconds`);
+        // Not "disconnected": OpenClaw's health monitor restarts a channel that
+        // says so for two minutes, and this one reconnects by itself.
+        reportStatus({ connected: undefined, lastError: `connector ${reason}` });
         reconnectTimer = setTimeout(connect, delay);
     }
     function connect() {
@@ -1150,6 +1255,10 @@ function createAccountTransport(accountId) {
                 if (activeRuntimeBinding?.connectorId !== origin.connectorId) {
                     fatalTransportError = "Authenticated connector does not match the configured connector identity pin";
                     stopped = true;
+                    // Stays stopped, but `openclaw channels status` says why (1.39.5):
+                    // not `connected: false`, which the host's health policy restarts,
+                    // and no lastConnectedAt, so no activity time for it to call stale.
+                    reportStatus({ connected: undefined, lastError: PIN_MISMATCH_STATUS });
                     throw new Error(fatalTransportError);
                 }
                 if (activeOrigin && activeOrigin.key !== origin.key) {
@@ -1200,6 +1309,8 @@ function createAccountTransport(accountId) {
                     askSockets.add(socket);
                 if (welcomeOffers(welcome, INBOUND_MEDIA_CAPABILITY))
                     mediaSockets.add(socket);
+                if (welcomeOffers(welcome, ANNOUNCEMENTS_CAPABILITY))
+                    announcementSockets.add(socket);
                 // Agent Backup (1.38.0): this account's schedule runs while this socket does.
                 if (welcomeOffers(welcome, BACKUP_CAPABILITY)) {
                     backupSockets.add(socket);
@@ -1216,6 +1327,7 @@ function createAccountTransport(accountId) {
                 negotiated = true;
                 connectorUnavailableSince = null;
                 retry = 0;
+                reportStatus({ connected: true, lastConnectedAt: Date.now(), lastError: null });
                 if (!ingressStarted) {
                     ingress.start();
                     ingressStarted = true;
@@ -1265,6 +1377,12 @@ function createAccountTransport(accountId) {
                             : frame.type === BACKUP_RUN_FRAME ? handleBackupRun(socket)
                                 : handleOutboundControlFrame(frame)),
             onOffered: (eventId) => settleSilentTurn(socket, eventId),
+            onRefused: (refusal) => {
+                try {
+                    hostApi?.logger.warn(`${log} ${refusedMessageLine(refusal)}`);
+                }
+                catch { /* a log that cannot be written changes nothing */ }
+            },
         });
         socket.on("open", () => {
             if (ws !== socket || stopped)
@@ -1277,6 +1395,7 @@ function createAccountTransport(accountId) {
         // also what the backend answers a refused list of agents with, so the
         // reason is kept here and the log names the real one.
         let closedHere;
+        let welcoming;
         const closeUnusable = (closeReason, why) => {
             if (socket.readyState === WebSocket.OPEN)
                 closedHere ??= why;
@@ -1297,7 +1416,16 @@ function createAccountTransport(accountId) {
                 closeUnusable("invalid-json", UNREADABLE_FRAME_REASON);
                 return;
             }
-            handleInbound(data).catch((error) => {
+            // A frame read together with the welcome waits until the welcome is
+            // taken (the agents announced), not refused for arriving before it.
+            const frameType = data && typeof data === "object" ? data.type : undefined;
+            // If the welcome is refused, the socket is already being closed for it
+            // and the frame is dropped: it is offered again on the next connection.
+            const turn = frameType === "welcome" ? undefined : welcoming;
+            const handled = turn ? turn.then((taken) => (!taken || ws !== socket || stopped ? undefined : handleInbound(data))) : handleInbound(data);
+            if (frameType === "welcome")
+                welcoming = handled.then(() => true, () => false);
+            handled.catch((error) => {
                 hostApi?.logger.error(`${log} inbound error: ${String(error)}`);
                 closeUnusable("protocol-error", UNHANDLED_FRAME_REASON);
             });
@@ -1806,6 +1934,14 @@ function createAccountTransport(accountId) {
             throw new Error("Stable outbound, parent event, and channel identities are required");
         }
         const turn = activeTurns.get(params.eventId);
+        // Nothing answers an announcement (1.40.0): a send for one (the agent's
+        // message tool during its turn, or a reply that reached the channel all
+        // the same) never reaches the backend, and ends for good, not retried.
+        if (turn?.announcement || announcementAcks.has(params.eventId)) {
+            throw new PlatformMessageNotDispatchedError(ANNOUNCEMENT_REPLY_DROPPED, {
+                cause: new Error(ANNOUNCEMENT_REPLY_DROPPED), retryable: false,
+            });
+        }
         const progress = turn !== undefined && !turn.replying;
         const limits = replyPartLimits(params, progress, params.attachments);
         let bodies = splitReply(params.text, limits);
@@ -1898,6 +2034,11 @@ function createAccountTransport(accountId) {
      * reply would, before anything is uploaded.
      */
     async function uploadReplyFiles(params) {
+        // A reply's files for an announcement are not uploaded either (1.40.0):
+        // the reply itself is refused (sendOutboundReply).
+        if (params.eventId && (activeTurns.get(params.eventId)?.announcement || announcementAcks.has(params.eventId))) {
+            return { fileIds: [], failed: params.mediaUrls.length };
+        }
         let readiness;
         try {
             readiness = await awaitOutboundReadiness(params.signal);

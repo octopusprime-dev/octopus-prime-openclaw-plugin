@@ -38,6 +38,8 @@ export const TURN_FAILED_TEXT = {
     temporary: TEMPORARY_TEXT,
     ai_account: SETUP_TEXT,
     setup: SETUP_TEXT,
+    busy: "I was still working on an earlier message — please send that again in a moment.",
+    context_full: "This conversation got too long for my AI model — please send that again. If it keeps happening, the workspace owner needs to check the agent's model.",
     unknown: TEMPORARY_TEXT,
 };
 /** The notice's outbound id: `turn-failed:<event_id>`, hashed when that is too long for the backend. */
@@ -51,6 +53,7 @@ export function turnFailedOutboundId(eventId) {
 const ACCOUNT_REASONS = new Set(["billing", "auth", "auth_permanent", "session_expired"]);
 const SETUP_REASONS = new Set(["model_not_found"]);
 const TEMPORARY_REASONS = new Set(["overloaded", "server_error", "timeout", "empty_response", "tls_certificate"]);
+const CONTEXT_REASONS = new Set(["context_overflow"]);
 const ACCOUNT_STATUS = new Set([401, 402, 403]);
 const TEMPORARY_STATUS = new Set([408, 425, 500, 502, 503, 504, 529]);
 // Core's own words for a rate limit (2026.10.4 failover/user-copy.ts), which
@@ -63,7 +66,21 @@ const BILLING_WORDS = /billing|insufficient[ _](?:quota|credit|balance|funds)|ex
 const ACCOUNT_WORDS = /billing|insufficient[ _](?:quota|credit|balance|funds)|exceeded your current quota|credit balance|out of credits|payment required|api[ _-]?key|unauthori[sz]ed|authenticat|oauth|re-?auth|sign[ -]?in|log[ -]?in|credentials? (?:expired|invalid|revoked)|token (?:expired|revoked)|\b40[12]\b/i;
 const SETUP_WORDS = /model (?:was )?not found|unknown model|no model (?:is )?(?:configured|selected|set)|isn't set up yet|not set up yet/i;
 const RATE_LIMIT_WORDS = /rate[ -]?limit|too many requests|usage limit|hit your (?:usage )?limit|limit (?:reached|exceeded)|\b429\b/i;
-const TEMPORARY_WORDS = /timed? ?out|timeout|no output for|stalled|stopped making progress|interrupted|overloaded|at capacity|temporar|service unavailable|currently unavailable|try again (?:later|shortly)|econnreset|econnrefused|etimedout|socket hang up|network|\b(?:50[0234]|529)\b/i;
+const TEMPORARY_WORDS = /timed? ?out|timeout|no output for|stalled|stopped making progress|interrupted|aborted|overloaded|at capacity|temporar|service unavailable|currently unavailable|try again (?:later|shortly)|econnreset|econnrefused|etimedout|socket hang up|network|\b(?:50[0234]|529)\b/i;
+// Core's replies when the conversation's agent is still on an earlier message
+// (2026.10.x get-reply-run-queue and dispatch-from-config): sent as an
+// ordinary reply, not an error, so the turn's watch takes them as a failure.
+const CORE_BUSY_REPLIES = [
+    "⚠️ Previous run is still shutting down.",
+    "This message was not queued because the session queue is full.",
+];
+const BUSY_WORDS = /previous run is still shutting down|session queue is full/i;
+// Core's and providers' words for a conversation too long for the model.
+const CONTEXT_WORDS = /context overflow|context (?:is )?too (?:large|long)|prompt (?:is )?too (?:large|long)|maximum context length|context[ _](?:length|window)[ _](?:exceeded|too)|context_length_exceeded/i;
+/** Whether a reply core wrote is its "the agent is still busy" reply. */
+export function isCoreBusyReply(text) {
+    return CORE_BUSY_REPLIES.some((reply) => text.startsWith(reply));
+}
 function record(value) {
     return value && typeof value === "object" ? value : undefined;
 }
@@ -83,6 +100,10 @@ function errorChain(error) {
     return chain;
 }
 function textCause(text) {
+    if (BUSY_WORDS.test(text))
+        return "busy";
+    if (CONTEXT_WORDS.test(text))
+        return "context_full";
     if (CORE_RATE_LIMIT_WORDS.test(text))
         return "rate_limit";
     if (ACCOUNT_WORDS.test(text))
@@ -111,6 +132,8 @@ export function classifyTurnFailure(error, failureText) {
             return "ai_account";
         if (reason && SETUP_REASONS.has(reason))
             return "setup";
+        if (reason && CONTEXT_REASONS.has(reason))
+            return "context_full";
         // A rate limit passes by itself, unless it is the account's money
         // (out of credits, OpenAI's insufficient_quota).
         if (reason === "rate_limit" || status === 429)
@@ -165,7 +188,9 @@ export function createTurnWatch() {
             if (info?.kind !== "final")
                 return payload;
             const text = typeof payload.text === "string" ? payload.text : "";
-            if (payload.isError === true) {
+            // Core's "still busy" replies (1.40.0) are no answer either: the notice
+            // says it in the person's words.
+            if (payload.isError === true || isCoreBusyReply(text)) {
                 failureText ??= text;
                 return null;
             }

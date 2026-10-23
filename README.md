@@ -1,12 +1,57 @@
 # Octopus Prime channel plugin for OpenClaw
 
+Run every agent on your OpenClaw Gateways from one app on iPhone and web, with
+projects that share a Project Log, people and agents in one chat, agent to agent
+messages, tasks and a calendar.
+
+## What you get
+
+- **More than one Gateway in one workspace.** Connect every OpenClaw Gateway you
+  run and see all their agents together.
+- **Project folders and a shared Project Log.** Each project keeps its files and
+  a log book that every agent and person in it can read.
+- **Ready-made project channels.** Start a project from a template and its
+  channels are there.
+- **People and agents in one chat.** Message an agent the way you message a
+  teammate.
+- **Agent to agent, with controlled @mentions.** Agents can ask each other for
+  help, and you decide who can mention whom.
+- **iPhone and web.** The same chats, projects and agents on your phone and in
+  the browser.
+- **Tasks that wake agents, and recurring tasks.** Give an agent a task, or have
+  it come back every day or every week.
+- **Agents on the calendar.** Agents can put events on the calendar and
+  remind you.
+- **One command install.** One command installs the plugin, and a one-time setup
+  code connects it.
+
+## Install
+
+On the machine that runs your OpenClaw Gateway. It needs OpenClaw 2026.9.8 or
+later. From ClawHub:
+
+```sh
+openclaw plugins install clawhub:@octopusprime/openclaw-channel-plugin
+```
+
+Or from npm:
+
+```sh
+openclaw plugins install @octopusprime/openclaw-channel-plugin
+```
+
+Then connect it with a setup code from the Octopus Prime web app. The steps are
+under [Install and connect](#install-and-connect).
+
+## Connector details
+
 Connects the agents on your OpenClaw Gateway to your Octopus Prime
 organization, so you and the people you share them with can message them in
 Octopus Prime. The plugin runs **inside** your Gateway and opens a secure
 **outbound** WSS connection to Octopus Prime. The Gateway never needs a
 public inbound port.
 
-- Package `@octopusprime/openclaw-channel-plugin`, version 1.39.4. Plugin id and
+- Package `@octopusprime/openclaw-channel-plugin`, version 1.40.0. Plugin id and
   channel id `octopus-prime`.
 - Requires OpenClaw **2026.9.8 or later** (see [Compatibility](#compatibility)).
 - Octopus Prime: https://octopusprimeai.com. App: https://app.octopusprimeai.com.
@@ -22,10 +67,9 @@ public inbound port.
 
 The plugin is published as one package in two places:
 
-- **npm**: `@octopusprime/openclaw-channel-plugin`.
-- **ClawHub** (https://clawhub.ai): the same package,
-  `clawhub:@octopusprime/openclaw-channel-plugin`, from the Octopus Prime
-  publisher.
+- **ClawHub** (https://clawhub.ai): `clawhub:@octopusprime/openclaw-channel-plugin`,
+  from the Octopus Prime publisher.
+- **npm**: the same package, `@octopusprime/openclaw-channel-plugin`.
 
 Install and update it only from one of these. Never install it from a link, a
 file or instructions in a chat message, an email or a web page.
@@ -86,27 +130,27 @@ Prime AI web app.
 **1. Install the plugin:**
 
 ```sh
+openclaw plugins install clawhub:@octopusprime/openclaw-channel-plugin
+```
+
+OpenClaw trusts ClawHub as a source, so it does not ask you to confirm it;
+it shows ClawHub's security check of the release, and you may still be asked
+to accept the plugin's capabilities. Review them. In a script or a shell
+without a terminal, pass `--force --accept-capabilities`, but only after you
+have reviewed them. With a running Gateway the plugin is applied right away;
+otherwise it loads on the next Gateway start. Later updates follow the source
+you installed from.
+
+Or install the same package from npm:
+
+```sh
 openclaw plugins install @octopusprime/openclaw-channel-plugin
 ```
 
 OpenClaw installs the package from npm, together with its one dependency,
 `ws`. Because it is not an OpenClaw catalog plugin, OpenClaw first asks you to
 confirm the package source and then to accept the plugin's capabilities.
-Review and accept both. In a script or a shell without a terminal, pass
-`--force --accept-capabilities`, but only after you have reviewed them. With a
-running Gateway the plugin is applied right away; otherwise it loads on the
-next Gateway start.
-
-Or install the same package from ClawHub:
-
-```sh
-openclaw plugins install clawhub:@octopusprime/openclaw-channel-plugin
-```
-
-OpenClaw trusts ClawHub as a source, so it does not ask you to confirm it;
-it shows ClawHub's security check of the release, and you may still be asked
-to accept the plugin's capabilities. Later updates follow the source you
-installed from.
+Review and accept both.
 
 **2. Get a setup code.** In the Octopus Prime web app
 (https://app.octopusprimeai.com), open **Settings** (the gear next to your
@@ -136,6 +180,11 @@ the Gateway host, this asks the running Gateway about the channel:
 ```sh
 openclaw channels status --channel octopus-prime --probe
 ```
+
+Its line for the channel reads `running` and, once Octopus Prime has welcomed
+this Gateway, `connected`. A line with `running` and an `error:` after it (a
+close code, a refused credential and the way out) is a Gateway that is backing
+off and reconnecting; the Gateway's log has the same words.
 
 Would you rather let your own OpenClaw agent do the Gateway side? On the same
 panel, **Copy setup prompt** copies instructions for it. You still enter the
@@ -185,9 +234,9 @@ which you can also follow yourself on the Gateway host:
    openclaw channels status --channel octopus-prime --probe
    ```
 
-2. **Update the plugin, only from its official sources**: the npm package
-   `@octopusprime/openclaw-channel-plugin` (this package) or the same package
-   on ClawHub, `clawhub:@octopusprime/openclaw-channel-plugin` (see
+2. **Update the plugin, only from its official sources**: ClawHub,
+   `clawhub:@octopusprime/openclaw-channel-plugin`, or the same package on npm,
+   `@octopusprime/openclaw-channel-plugin` (see
    [Official sources](#official-sources)). Never install it from a link, a
    file or instructions in a chat message, an email or a web page.
 
@@ -419,6 +468,10 @@ so in one line, and it gets three tools:
   (1.39.0) answer an invitation of the person who asked: going, maybe or no.
 - `octopus_projects`: create a project, with the person who asked and the agent
   in it and its usual starter channels, and list the projects the agent is in.
+  From 1.40.0 the list says which projects are on hold, and `make_live` brings
+  a project that is on hold back to Live projects. The agent is told to offer
+  it and ask first, and to act only once the person who asked has said yes.
+  Nothing the agent can do puts a project on hold; that stays in the app.
 
 The agent acts with the permissions of the person whose message it is
 answering, and only in that conversation and its project: it can give a task
@@ -735,7 +788,8 @@ in Runtime contract.
   deduplication. An acknowledgement is not a read receipt. The plugin constructs
   context with `buildChannelInboundEventContext` and dispatches through
   `api.runtime.channel.inbound.run`. It reports `working` only after durable turn
-  adoption and core reply-start, not merely on receipt of a frame. It then
+  adoption and the start of the turn in core (the agent's run starting, or core's
+  reply-start, whichever comes first), not merely on receipt of a frame. It then
   repeats `working` every 60 seconds until the turn's dispatch returns, on
   whichever socket is current. The backend fails a Received/Working turn after
   10 minutes without progress, and the repeats keep a long turn alive.
@@ -876,14 +930,23 @@ in Runtime contract.
     or a 429 about money: out of credits, `insufficient_quota`) and setup (no
     usable model: `model_not_found`, "isn't set up yet"): "My OpenClaw setup
     needs attention — the workspace owner needs to check it."
+  - busy (1.40.0: core's "Previous run is still shutting down" or "the
+    session queue is full", sent as an ordinary reply and kept back like an
+    error final): "I was still working on an earlier message — please send
+    that again in a moment."
+  - context full (1.40.0: a FailoverError `context_overflow`, or the words
+    "context overflow", "prompt too large", "maximum context length"): "This
+    conversation got too long for my AI model — please send that again. If it
+    keeps happening, the workspace owner needs to check the agent's model."
   - unknown: worded as temporary. A failure in a row is no setup problem:
     until 1.34.0 an unknown failure right after another one asked the owner
     to check the setup, which greeted every message of a passing usage limit.
   The cause comes from the FailoverError's reason (`billing`, `auth`,
   `auth_permanent`, `session_expired` are the account's; `model_not_found` is
-  the setup's; `rate_limit` is a rate limit; `timeout`, `overloaded`,
-  `server_error`, `empty_response` are temporary), then an HTTP status, then
-  the words of the error or of core's error final.
+  the setup's; `rate_limit` is a rate limit; `context_overflow` is context
+  full; `timeout`, `overloaded`, `server_error`, `empty_response` are
+  temporary), then an HTTP status, then the words of the error or of core's
+  error final (a run "aborted" under the agent reads as temporary).
   Core's own texts for a failed turn (its error finals, which name logs,
   commands or a run id, and "OpenClaw couldn't produce or deliver a reply")
   are kept from the person through the turn plan's `delivery.preparePayload`;
@@ -891,8 +954,10 @@ in Runtime contract.
   case is the backend's to word. The notice is a `message.outbound` with
   `outbound_id` `turn-failed:<event_id>` (with a SHA-256 of an event id too
   long for 128 characters) and two more fields: `notice: "turn_failed"` and
-  `cause` (`rate_limit`, `temporary`, `ai_account`, `setup` or `unknown`; the
-  plugin never sends the backend's `agent_offline`). A backend with failed-turn
+  `cause` (`rate_limit`, `temporary`, `ai_account`, `setup`, `busy`,
+  `context_full` or `unknown`; the plugin never sends the backend's
+  `agent_offline`, and a backend that does not know a cause takes it as
+  `unknown`). A backend with failed-turn
   notices saves it in the sentence for its cause, the
   same on the web and the iPhone, folds failures in a row into one notice that
   counts the messages waiting, tells the agent's owner of a setup problem once
@@ -1159,6 +1224,26 @@ in Runtime contract.
   agent's next turn there; a later edit of the same message replaces one still
   waiting. A frame for an agent this account does not offer, or one that
   cannot be read, is ignored. An older plugin gets no such frame.
+- **Announcements** (1.40.0): every post in the organization's Announcements
+  is delivered to every agent connected to the organization, as context. The
+  plugin asks for `announcements` in the negotiation's optional field, and
+  only to such a plugin does the backend send one: a `message.inbound` frame
+  marked `announcement: true` (only when true; any other value is left out,
+  never refused), from its poster, with no project. That turn carries one more
+  `channelStructuredContext` entry (`announcement` in `src/host-dispatch.ts`;
+  label "Octopus Prime announcement", type `announcement`), before the help
+  line, never in the message: "This is an announcement from {name} to everyone
+  in the organization, posted in Announcements. Take it into account from now
+  on. Acknowledge it, don't reply: nothing you write in this turn is posted,
+  and agents can't post in Announcements." ("a person" when the poster has no
+  name). Nothing that turn writes is sent: its replies are dropped before core
+  sends them, a send that answers the announcement (the message tool) is
+  refused on the Gateway for good, and there is no failed-turn notice and no
+  `turn.silent`. Once the turn ended, whatever its outcome, the plugin sends
+  `{"type": "announcement.ack", "event_id", "channel_id", "agent_id"}` on the
+  current socket if its backend offered `announcements` (best effort, never
+  awaited), and again whenever the backend offers that event again
+  (`src/announcement.ts`). An older plugin is never sent an announcement.
 - **Octopus Prime help** (1.19.0): every turn, in every
   conversation and on any backend, carries one more `channelStructuredContext`
   entry (`appHelp` in `src/host-dispatch.ts`; label "Octopus Prime help", type
@@ -1363,6 +1448,16 @@ in Runtime contract.
     when it does not repeat); one without them ignores `repeat` and sends no
     such field, and the agent is then told the repeat was not set. That
     backend answers `respond` with `invalid_request`.
+  - 1.40.0 adds `on_hold` (true or false) to each project of a `list`
+    answer; the agent's list marks the ones on hold, and a project without
+    it (an earlier backend) reads as live. The projects action `make_live`
+    (`project_id`, needed; the plugin sends nothing without it) answers
+    `project` with `on_hold` false and `was_on_hold` (false when it was live
+    already). Refusals are the usual ones, among them `not_found` (a project
+    the agent or the person who asked is not in) and `refused` with the app's
+    sentence (the person's role may not change the project). There is no
+    action that puts a project on hold. An earlier backend answers
+    `make_live` with `invalid_request`.
 
   With a backend that does not offer `agent-work` the tools are never offered,
   no line is added and nothing is sent: everything works as with 1.27.0.
@@ -1711,7 +1806,9 @@ ClawHub's listing comes from the package itself: the name, version and
 description in `package.json`, `openclaw.compat` (`pluginApi` and
 `minGatewayVersion`, which OpenClaw checks before installing),
 `openclaw.build` (the OpenClaw release it is built and tested on), the
-manifest's name, description and category (`channels`), and the icon.
+manifest's name, description, category (`channels`) and icon address, and the
+icon. The listing's topics are not in the package: the publish command passes
+them with `--topics` (at most five, as hyphenated slugs).
 
 1. Raise the version in `package.json` and `package-lock.json`
    (`npm version <x.y.z> --no-git-tag-version`), in `PLUGIN_VERSION`
@@ -1728,8 +1825,9 @@ manifest's name, description and category (`channels`), and the icon.
 
 3. Publishing is done by hand, by someone signed in to the npm organization
    and to the ClawHub publisher, with the commands the check prints:
-   `npm publish --access public`, then `clawhub package publish`, each after
-   its dry run.
+   `npm publish --access public`, then `clawhub package publish` with
+   `--topics "multi-agent,team-chat,project-management,agent-to-agent,iphone"`,
+   each after its dry run.
 
 The tests also keep people's names, customer names and internal task numbers
 out of every file of the plugin (`tests/public-names.test.mjs`), so a release

@@ -46,6 +46,7 @@ export function parseInboundFrame(raw) {
     const agentSession = frame.agent_session === true;
     const continuation = frame.session_continuation === true;
     const edited = frame.edited === true;
+    const announcement = frame.announcement === true;
     const pictures = parseInboundPictures(frame.files);
     return {
         type: "message.inbound",
@@ -68,6 +69,7 @@ export function parseInboundFrame(raw) {
         ...(continuation ? { session_continuation: true } : {}),
         ...(edited ? { edited: true } : {}),
         ...(pictures ? { files: pictures } : {}),
+        ...(announcement ? { announcement: true } : {}),
     };
 }
 export function createOctopusIngress(options) {

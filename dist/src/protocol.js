@@ -136,18 +136,27 @@ export const INBOUND_MEDIA_CAPABILITY = "inbound-media";
  * An older backend is never sent a backup call.
  */
 export const BACKUP_CAPABILITY = "agent-backup";
+/**
+ * Optional, both ways (1.40.0): the plugin asks for it the same way, so a
+ * backend sends a post in the organization's Announcements
+ * (`message.inbound` with `announcement: true`) only to a plugin that asked;
+ * and only on a connection whose backend offered it in its welcome does the
+ * plugin confirm one (`announcement.ack`, src/announcement.ts). An older
+ * plugin is never sent an announcement.
+ */
+export const ANNOUNCEMENTS_CAPABILITY = "announcements";
 export const OPTIONAL_CAPABILITIES = [
     LOG_BOOK_CAPABILITY, PROJECT_FOLDER_CAPABILITY, CHANNEL_HISTORY_CAPABILITY, TURN_SILENCE_CAPABILITY,
     SESSION_TITLE_CAPABILITY, GATEWAY_RESET_CAPABILITY, SLASH_COMMANDS_CAPABILITY, MESSAGE_EDITED_CAPABILITY,
     AGENT_WORK_CAPABILITY, RICH_PRESENTATION_CAPABILITY, ASK_USER_CAPABILITY,
-    INBOUND_MEDIA_CAPABILITY, BACKUP_CAPABILITY,
+    INBOUND_MEDIA_CAPABILITY, BACKUP_CAPABILITY, ANNOUNCEMENTS_CAPABILITY,
 ];
 /**
  * This package's version (package.json `version`), sent at setup and, since
  * 1.12.0, in each negotiation, so the backend can tell an Owner when the
  * plugin on a Gateway is too old.
  */
-export const PLUGIN_VERSION = "1.39.4";
+export const PLUGIN_VERSION = "1.40.0";
 /**
  * The v1 negotiation, plus the plugin's version and, when the host gives one,
  * the running OpenClaw version (the transport's checked `api.runtime.version`).

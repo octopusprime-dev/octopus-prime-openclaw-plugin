@@ -1,8 +1,9 @@
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/core";
 import { buildChannelInboundEventContext, } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { accountAgentIds, accountEnabled, accountSection, DEFAULT_ACCOUNT_ID, normalizeAccountId, withAccountConfig, } from "./accounts.js";
+import { accountAgentIds, accountEnabled, accountSection, DEFAULT_ACCOUNT_ID, logPrefix, normalizeAccountId, withAccountConfig, } from "./accounts.js";
 import { AGENT_WORK_INSTRUCTION } from "./agent-work.js";
+import { announcementInstruction } from "./announcement.js";
 import { AUDIT_NOTICE, forgetAuditedSession, rememberAuditedSession } from "./audited-workspace.js";
 import { rememberConversationSession } from "./channel-history.js";
 import { withMissingPicturesNote } from "./inbound-media.js";
@@ -141,6 +142,24 @@ export function messageEdited(frame) {
     };
 }
 /**
+ * What an announcement's turn tells its agent (1.40.0, src/announcement.ts):
+ * a post in the organization's Announcements, from its poster to everyone, to
+ * take into account and acknowledge, not answer (`announcement: true`).
+ * Nothing the turn writes is sent (dispatchOctopusInbound drops its replies).
+ * Only for a frame that says so; like the entries above, a context block of
+ * its own: nothing typed into a message adds it.
+ */
+export function announcement(frame) {
+    if (frame.announcement !== true)
+        return undefined;
+    return {
+        label: "Octopus Prime announcement",
+        source: CHANNEL,
+        type: "announcement",
+        payload: { instruction: announcementInstruction(frame.sender.name) },
+    };
+}
+/**
  * While the computer running the Gateway has been under heavy load for a
  * minute (1.27.0; 1.36.0 src/machine-stats.ts), an agent's next turn warns it,
  * naming the load, at most once in 15 minutes (the stronger warning once more
@@ -211,12 +230,15 @@ export function octopusSessionKey(agentId, channelId, accountId) {
 }
 export async function dispatchOctopusInbound(options) {
     const { api, frame, lifecycle } = options;
+    const announced = frame.announcement === true;
     const accountId = normalizeAccountId(options.accountId);
+    // The default account's lines read "octopus-prime"; another account's name it.
+    const log = logPrefix(accountId);
     const watch = createTurnWatch();
     const working = createWorkingStatusGate({
         lifecycle,
         onWorking: options.onWorking,
-        onStatusError: () => api.logger.error("octopus-prime Working status could not be sent"),
+        onStatusError: () => api.logger.error(`${log} Working status could not be sent`),
     });
     // The message as the agent gets it. In a project's channel the session may
     // use the log book tool, and a new session gets CONTEXT.md before the
@@ -235,7 +257,7 @@ export async function dispatchOctopusInbound(options) {
             entry = logBook.readSessionEntry({ agentId: frame.agent_id, sessionKey });
         }
         catch (error) {
-            api.logger.warn(`octopus-prime project log book was not added: ${error instanceof Error ? error.message : String(error)}`);
+            api.logger.warn(`${log} project log book was not added: ${error instanceof Error ? error.message : String(error)}`);
             return frame.body;
         }
         if (!startsNewSession(entry, cfg, sessionKey, frame.thread_id))
@@ -290,14 +312,14 @@ export async function dispatchOctopusInbound(options) {
         // Context blocks of their own, each only for a frame that says so: the
         // sender's two-step login (1.6.0), the audited workspace (1.7.0), then the
         // project log's instruction (1.13.0), a fresh session's first message
-        // (1.24.0), a message edited to mention the agent (1.26.0), the computer
-        // under heavy load (1.27.0), the tools for tasks, calendar and projects
-        // where the backend offers them (1.28.0); and, on every turn, last, where
-        // to read how the app works (1.19.0).
+        // (1.24.0), a message edited to mention the agent (1.26.0), an
+        // announcement (1.40.0), the computer under heavy load (1.27.0), the tools
+        // for tasks, calendar and projects where the backend offers them (1.28.0);
+        // and, on every turn, last, where to read how the app works (1.19.0).
         const structuredContext = [
             senderProtection(frame), workspaceAudit(frame), projectLog(frame), sessionContinuation(frame),
-            messageEdited(frame), machineLoad(options.machineLoad?.()), agentWork(options.agentWork?.() === true),
-            appHelp(),
+            messageEdited(frame), announcement(frame), machineLoad(options.machineLoad?.()),
+            agentWork(options.agentWork?.() === true), appHelp(),
         ].filter((entry) => entry !== undefined);
         const ctxPayload = buildChannelInboundEventContext({
             channel: CHANNEL,
@@ -376,13 +398,28 @@ export async function dispatchOctopusInbound(options) {
             ctxPayload,
             record: { createIfMissing: true },
             dispatcherOptions: { onReplyStart: working.onReplyStart },
-            // How the agent's run ended, for the failed-turn notice (1.9.0).
-            replyOptions: { onAgentRunTerminalOutcome: watch.onAgentRunTerminalOutcome },
+            replyOptions: {
+                // How the agent's run ended, for the failed-turn notice (1.9.0).
+                onAgentRunTerminalOutcome: watch.onAgentRunTerminalOutcome,
+                // Working when the agent's run starts (1.39.5). Core's typing callback
+                // (dispatcherOptions.onReplyStart) is the same signal only for a chat
+                // it types in at once: a conversation of kind "channel" that does not
+                // mention the agent gets core's group default, which types when the
+                // first words arrive, so a turn that thinks or works with tools first
+                // sent no Working, and the backend's two minutes without progress
+                // ended it as "didn't respond". Both ask the same gate, which sends
+                // once, after adoption. No value is returned: core reads it as an owner.
+                onAgentRunStart: () => { void working.onReplyStart(); },
+            },
             delivery: {
                 deliver: async (payload) => options.deliver(payload),
                 durable,
                 // Core's error finals stay with the Gateway; the notice says it instead.
+                // An announcement's turn sends nothing (1.40.0): every reply, block or
+                // final, is dropped here, so core suppresses it and never sends it.
                 preparePayload: (payload, info) => {
+                    if (announced)
+                        return null;
                     const prepared = watch.preparePayload(payload, info);
                     if (prepared && info?.kind === "final")
                         options.onReply?.("sending");
@@ -390,12 +427,12 @@ export async function dispatchOctopusInbound(options) {
                 },
                 onDelivered: (payload, info, delivered) => {
                     watch.onDelivered(payload, info, delivered);
-                    if (info?.kind === "final" && delivered?.visibleReplySent !== false)
+                    if (!announced && info?.kind === "final" && delivered?.visibleReplySent !== false)
                         options.onReply?.("delivered");
                 },
                 onError: (error, info) => {
                     watch.onError(error, info);
-                    api.logger.error(`octopus-prime outbound delivery failed: ${String(error)}`);
+                    api.logger.error(`${log} outbound delivery failed: ${String(error)}`);
                 },
             },
         };
@@ -404,7 +441,11 @@ export async function dispatchOctopusInbound(options) {
     };
     // The turn's verdict (src/turn-failure.ts): one that failed gets its notice.
     // Failures in a row are the backend's to collapse into one message (1.34.0).
+    // An announcement's turn is neither failed nor silent to the backend
+    // (1.40.0): the caller confirms it, whatever its outcome.
     const judge = (outcome) => {
+        if (announced)
+            return;
         try {
             const verdict = watch.verdict({ ...outcome, cancelled: lifecycle.abortSignal?.aborted === true });
             if (verdict.kind === "silent")
@@ -414,7 +455,7 @@ export async function dispatchOctopusInbound(options) {
             }
         }
         catch {
-            api.logger.warn(`octopus-prime the outcome of event ${frame.event_id} could not be judged`);
+            api.logger.warn(`${log} the outcome of event ${frame.event_id} could not be judged`);
         }
     };
     let result;
